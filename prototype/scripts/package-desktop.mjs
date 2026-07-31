@@ -62,6 +62,7 @@ const arch = argument("--arch") || process.arch;
 if (!["arm64", "x64"].includes(arch)) throw new Error(`不支持的 macOS 架构：${arch}`);
 
 await run(process.execPath, [path.join(root, "node_modules/vite/bin/vite.js"), "build"]);
+await run(process.execPath, [path.join(root, "scripts/sanitize-client-build.mjs")]);
 await run(path.join(root, "node_modules/.bin/electron-builder"), ["--mac", "dir", `--${arch}`]);
 
 const appPath = await findBuiltApp();

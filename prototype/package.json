@@ -21,7 +21,7 @@
   "main": "desktop/main.mjs",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/sanitize-client-build.mjs && node scripts/prepare-sites-build.mjs",
     "test:unit": "node --test tests/*.test.mjs",
     "test:ui": "playwright test",
     "test": "npm run test:unit && npm run test:ui && npm run build",

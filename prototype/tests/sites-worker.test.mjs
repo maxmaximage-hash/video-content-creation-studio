@@ -61,8 +61,10 @@ test("does not turn missing API or write requests into the app shell", async () 
   }
 });
 
-test("emits the files required by Sites packaging", async () => {
-  await access(new URL("../dist/client/index.html", import.meta.url));
-  await access(new URL("../dist/server/index.js", import.meta.url));
-  await access(new URL("../dist/.openai/hosting.json", import.meta.url));
+test("includes the source files required by Sites packaging", async () => {
+  await access(new URL("../index.html", import.meta.url));
+  await access(new URL("../worker/index.js", import.meta.url));
+  await access(new URL("../.openai/hosting.json", import.meta.url));
+  await access(new URL("../scripts/prepare-sites-build.mjs", import.meta.url));
+  await access(new URL("../scripts/sanitize-client-build.mjs", import.meta.url));
 });
