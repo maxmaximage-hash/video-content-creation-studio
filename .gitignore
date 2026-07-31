@@ -1,0 +1,46 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+*.part
+
+# Local libraries and authentication profiles must never enter source control.
+*.library/
+**/*.library/
+**/.auth-browser/
+**/.qa-auth-browser/
+prototype/.qa-*/
+prototype/.xhs-qa-library/
+prototype/.real-*/
+prototype/install-backups/
+
+# Dependencies, generated bundles, reports, and local QA artifacts.
+node_modules/
+prototype/node_modules/
+prototype/dist/
+prototype/release/
+prototype/test-results/
+prototype/playwright-report/
+prototype/qa/
+prototype/public/qa/
+prototype/index-*.js
+graphify-out/
+prototype/src/graphify-out/
+
+# Local project-management records are not part of the public distribution.
+AGENTS.md
+PROJECT.md
+PROJECT_MANAGER.md
+TASKS.md
+DECISIONS.md
+design-qa.md
+/auth-capture.mjs
+prototype/AGENTS.md
+prototype/design-qa.md
+docs/reference/
+docs/执行任务书模板.md
+docs/采集稳定性回归台账.md
+docs/视频内容创作中台-产品需求与前期对齐.md
+docs/创作单元素材归集与剪辑交接协议.md

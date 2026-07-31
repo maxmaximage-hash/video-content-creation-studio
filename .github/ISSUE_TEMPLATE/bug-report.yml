@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a reproducible problem without sharing private media or credentials.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Never attach cookies, tokens, passwords, private Library contents, or private media.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: 0.1.0 / git commit
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS and architecture
+      placeholder: macOS 15.x, Apple Silicon
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Installation
+        - Inspiration capture
+        - Creation
+        - Queue
+        - Archive
+        - Library or NAS
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use a disposable test card for destructive workflows.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized error code
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed cookies, tokens, passwords, private links, personal paths, and private media.
+          required: true

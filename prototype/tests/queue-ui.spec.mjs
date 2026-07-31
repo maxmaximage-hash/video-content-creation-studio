@@ -1,0 +1,712 @@
+import { expect, test } from "@playwright/test";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const prototypeRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+const covers = [
+  "/assets/covers/coffee-alley.png",
+  "/assets/covers/creator-desk.png",
+  "/assets/covers/mountain-trail.png",
+  "/assets/covers/coffee-alley.png",
+  "/assets/covers/creator-desk.png",
+  "/assets/covers/mountain-trail.png",
+];
+
+const projects = [
+  {
+    id: "C000127",
+    title: "一条视频从选题到开拍的 24 小时",
+    body: "把创作者看不见的准备工作拍出来：资料、故事板、场景确认与拍摄清单。这个摘要特意足够长，用于验证待发布卡片只显示开头两行，完整正文仍保留在继续创作页面。还要继续记录器材检查、现场沟通、光线变化、收音测试、备选机位、拍摄节奏和临时调整，让文本长度在宽屏卡片中也稳定超过两行。",
+    covers: covers.slice(0, 2),
+    references: [{ id: "I000101" }, { id: "I000102" }],
+    category: "教程",
+    categoryAssignedByUser: true,
+    modified: "今天 10:24",
+    createdAt: "2026.07.23 10:24",
+  },
+  {
+    id: "C000128",
+    title: "城市醒来之前，我走进了一条老街",
+    body: "清晨六点，店铺还没有完全开门。沿着梧桐树下的小路，记录咖啡机启动、卷帘门升起和第一班公交经过的声音。",
+    covers,
+    references: [{ id: "I000103" }, { id: "I000104" }],
+    category: "展示面",
+    categoryAssignedByUser: true,
+    modified: "刚刚",
+    createdAt: "2026.07.23 10:26",
+  },
+  {
+    id: "C000126",
+    title: "在山脊上等一场云海",
+    body: "用自然声和长镜头记录一次清晨徒步，让画面保留真实的停顿。",
+    covers: covers.slice(1, 3),
+    references: [{ id: "I000099" }, { id: "I000100" }],
+    category: "旅行记录",
+    categoryAssignedByUser: true,
+    modified: "昨天 18:40",
+    createdAt: "2026.07.22 18:40",
+  },
+];
+const inspirations = [
+  {
+    id: "I000301",
+    platform: "抖音",
+    contentType: "image",
+    originalUrl: "https://www.douyin.com/video/reference-301",
+    resolvedUrl: "https://www.douyin.com/video/reference-301",
+    title: "灵感标题只应出现在参考卡片中",
+    body: "这是用来验证创作页保持空白的灵感正文。",
+    author: "参考作者",
+    coverLocalPath: "/assets/covers/coffee-alley.png",
+    category: "认知",
+    categoryAssignedByUser: true,
+    stats: { likes: 1234, comments: 56, favorites: 78 },
+  },
+  {
+    id: "I000302",
+    platform: "小红书",
+    contentType: "image",
+    originalUrl: "https://www.xiaohongshu.com/explore/reference-302",
+    title: "第二条完整灵感卡片",
+    body: "用于验证多列参考区。",
+    author: "作者二",
+    coverLocalPath: "/assets/covers/creator-desk.png",
+    category: "展示面",
+    categoryAssignedByUser: true,
+    stats: { likes: 456, comments: 21 },
+  },
+  {
+    id: "I000303",
+    platform: "Bilibili",
+    contentType: "image",
+    originalUrl: "https://www.bilibili.com/video/reference-303",
+    title: "第三条完整灵感卡片",
+    body: "用于验证三列参考区。",
+    author: "作者三",
+    coverLocalPath: "/assets/covers/mountain-trail.png",
+    category: "教程",
+    categoryAssignedByUser: true,
+    stats: { likes: 789, favorites: 34 },
+  },
+];
+const browserErrors = new WeakMap();
+
+async function seedLibrary(request) {
+  const response = await request.post("/api/library", {
+    data: {
+      categories: ["情感", "展示面", "认知", "教程", "旅行记录"],
+      inspirations,
+      projects,
+      archive: [],
+      activeProject: null,
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+}
+
+async function openQueue(page) {
+  await page.goto("/");
+  await page.getByRole("button", { name: /^待发布/ }).click();
+  await expect(page.locator("[data-project-id]")).toHaveCount(3);
+}
+
+async function order(page) {
+  return page.locator("[data-project-id]").evaluateAll((cards) => cards.map((card) => card.dataset.projectId));
+}
+
+async function orderWithPriority(page) {
+  return page.locator("[data-project-id]").evaluateAll((cards) => cards.map((card) => ({
+    id: card.dataset.projectId,
+    priority: card.querySelector(".priority-block")?.textContent.trim(),
+  })));
+}
+
+async function dragToCard(page, sourceId, targetId, sourceMode = "handle") {
+  const handle = sourceMode === "card"
+    ? page.locator(`[data-project-id="${sourceId}"] .queue-card-topbar > span`).last()
+    : page.locator(`[data-project-id="${sourceId}"] .drag-zone`);
+  const sourceCard = page.locator(`[data-project-id="${sourceId}"]`);
+  const target = page.locator(`[data-project-id="${targetId}"]`);
+  const currentOrder = await order(page);
+  const movingUp = currentOrder.indexOf(sourceId) > currentOrder.indexOf(targetId);
+  await handle.scrollIntoViewIfNeeded();
+  const sourceBox = await handle.boundingBox();
+  const sourceCardBox = await sourceCard.boundingBox();
+  let targetBox = await target.boundingBox();
+  if (!sourceBox || !sourceCardBox || !targetBox) throw new Error("Drag target is not visible");
+  const pointerStartY = sourceBox.y + sourceBox.height / 2;
+  const pointerToCardCenter = sourceCardBox.y + sourceCardBox.height / 2 - pointerStartY;
+
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, pointerStartY);
+  await page.mouse.down();
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, pointerStartY + 10, { steps: 3 });
+  for (let attempt = 0; attempt < 12 && (targetBox.y < 40 || targetBox.y + targetBox.height > 860); attempt += 1) {
+    await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y < 40 ? 60 : 840, { steps: 4 });
+    await page.waitForTimeout(90);
+    targetBox = await target.boundingBox();
+    if (!targetBox) throw new Error("Drag target disappeared");
+  }
+  const direction = movingUp ? -1 : 1;
+  const crossTargetCenter = () => (
+    targetBox.y
+    + targetBox.height / 2
+    - pointerToCardCenter
+    + direction * Math.max(24, targetBox.height / 2 - 24)
+  );
+  await page.mouse.move(targetBox.x + targetBox.width / 2, crossTargetCenter(), { steps: 14 });
+  await page.waitForTimeout(90);
+  targetBox = await target.boundingBox();
+  if (!targetBox) throw new Error("Drag target disappeared");
+  const viewport = page.viewportSize();
+  const edgeY = movingUp ? 32 : (viewport?.height || 900) - 32;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const current = await order(page);
+    const sourceIndex = current.indexOf(sourceId);
+    const targetIndex = current.indexOf(targetId);
+    if (movingUp ? sourceIndex < targetIndex : sourceIndex > targetIndex) break;
+    await page.mouse.move(
+      targetBox.x + targetBox.width / 2,
+      edgeY + (attempt % 2 ? (movingUp ? 2 : -2) : 0),
+      { steps: 3 },
+    );
+    await page.waitForTimeout(90);
+  }
+}
+
+test.beforeEach(async ({ request, page }) => {
+  const errors = [];
+  browserErrors.set(page, errors);
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  page.on("pageerror", (error) => errors.push(error.message));
+  await seedLibrary(request);
+});
+
+test.afterEach(async ({ page }) => {
+  expect(browserErrors.get(page) || []).toEqual([]);
+});
+
+test("card hierarchy, editable copy, large cover surfaces and button isolation", async ({ page, request }) => {
+  await openQueue(page);
+
+  const firstCard = page.locator('[data-project-id="C000127"]');
+  await expect(firstCard.locator(".priority-block")).toHaveText("01");
+  await expect(firstCard.locator(".priority-block")).not.toContainText("优先级");
+  await expect(page.getByRole("button", { name: /^(上移|下移)$/ })).toHaveCount(0);
+  await expect(firstCard).not.toContainText(/C\d{6}/);
+  await expect(firstCard.locator(".queue-card-topbar")).toContainText("正在创作");
+  await expect(firstCard.getByLabel("一条视频从选题到开拍的 24 小时分类")).toHaveValue("教程");
+  await expect(firstCard.getByTestId("collapsed-covers-C000127")).toContainText("2 张封面");
+  await expect(firstCard.getByLabel("待发布标题")).toHaveValue(projects[0].title);
+  await expect(firstCard.getByLabel("待发布正文")).toHaveValue(projects[0].body);
+
+  const editorMetrics = await firstCard.evaluate((card) => {
+    const title = card.querySelector(".queue-title-editor");
+    const body = card.querySelector(".queue-body-editor");
+    const cover = card.querySelector(".queue-cover-item");
+    return {
+      titleFits: title.scrollHeight <= title.clientHeight + 1,
+      bodyOverflow: getComputedStyle(body).overflowY,
+      bodyResize: getComputedStyle(body).resize,
+      bodyMinHeight: getComputedStyle(body).minHeight,
+      bodyMaxHeight: getComputedStyle(body).maxHeight,
+      coverWidth: Math.round(cover.getBoundingClientRect().width),
+      coverHeight: Math.round(cover.getBoundingClientRect().height),
+    };
+  });
+  expect(editorMetrics).toMatchObject({
+    titleFits: true,
+    bodyOverflow: "auto",
+    bodyResize: "vertical",
+    bodyMinHeight: "96px",
+    bodyMaxHeight: "320px",
+  });
+  expect(editorMetrics.coverWidth).toBeGreaterThanOrEqual(126);
+  expect(editorMetrics.coverHeight).toBeGreaterThanOrEqual(200);
+
+  const originalOrder = await order(page);
+  await firstCard.locator('.queue-title button[aria-label="复制"]').click();
+  await firstCard.locator('.queue-summary button[aria-label="复制"]').click();
+  await expect(page.locator(".toast")).toContainText(/已(模拟)?复制/);
+  expect(await order(page)).toEqual(originalOrder);
+  await expect(firstCard).not.toHaveClass(/dragging/);
+  const fieldStyles = await firstCard.locator(".queue-text-field").evaluateAll((fields) => fields.map((field) => ({
+    borderStyle: getComputedStyle(field).borderTopStyle,
+    borderWidth: getComputedStyle(field).borderTopWidth,
+  })));
+  expect(fieldStyles).toEqual([
+    { borderStyle: "solid", borderWidth: "1px" },
+    { borderStyle: "solid", borderWidth: "1px" },
+  ]);
+
+  const dormantCoverControls = firstCard.locator(".queue-cover-sort-handle, .queue-native-drag-handle, .queue-target-menu-button, .queue-cover-remove");
+  expect(await dormantCoverControls.evaluateAll((controls) => controls.every((control) => {
+    const style = getComputedStyle(control);
+    return style.opacity === "0" && style.pointerEvents === "none";
+  }))).toBe(true);
+  await expect(firstCard.locator("svg.lucide-ellipsis, svg.lucide-more-horizontal")).toHaveCount(0);
+  await firstCard.getByRole("button", { name: "展开封面 2 张" }).first().click();
+  await expect(firstCard.getByTestId("expanded-covers-C000127").locator("img")).toHaveCount(2);
+  await expect(firstCard.getByTestId("add-cover-C000127")).toBeVisible();
+
+  await firstCard.getByRole("button", { name: "预览封面 1" }).click();
+  const lightbox = page.locator(".queue-cover-lightbox");
+  await expect(page.getByRole("dialog", { name: "封面预览" })).toBeVisible();
+  await expect(lightbox).not.toContainText("查看封面大图");
+  await expect(page.getByRole("dialog", { name: "封面预览" }).locator("img")).toBeVisible();
+  await expect(lightbox).toHaveCSS("background-color", "rgba(0, 0, 0, 0.88)");
+  await page.keyboard.press("Escape");
+  await expect(lightbox).toHaveCount(0);
+
+  await firstCard.getByRole("button", { name: "预览封面 1" }).click();
+  await page.mouse.click(24, 24);
+  await expect(lightbox).toHaveCount(0);
+
+  await firstCard.getByRole("button", { name: "展开封面 2 张" }).first().click();
+  await firstCard.getByRole("button", { name: "预览封面 1" }).click();
+  await page.getByRole("button", { name: "关闭封面预览" }).click();
+  await expect(lightbox).toHaveCount(0);
+
+  const fileChooserPromise = page.waitForEvent("filechooser");
+  await firstCard.getByTestId("add-cover-C000127").click();
+  const fileChooser = await fileChooserPromise;
+  await fileChooser.setFiles(path.join(prototypeRoot, "public/assets/covers/mountain-trail.png"));
+  await expect(firstCard.getByTestId("expanded-covers-C000127").locator("img")).toHaveCount(3);
+  expect(await order(page)).toEqual(originalOrder);
+  await expect.poll(async () => {
+    const response = await request.get("/api/library");
+    return (await response.json()).projects.find((project) => project.id === "C000127")?.covers.length;
+  }).toBe(3);
+
+  const sixCoverCard = page.locator('[data-project-id="C000128"]');
+  await sixCoverCard.getByRole("button", { name: "展开封面 6 张" }).first().click();
+  const expanded = sixCoverCard.getByTestId("expanded-covers-C000128");
+  await expect(expanded.locator("img")).toHaveCount(6);
+  const addButtonShape = await sixCoverCard.getByTestId("add-cover-C000128").evaluate((button) => ({
+    text: button.textContent.trim(),
+    svgCount: button.querySelectorAll("svg").length,
+  }));
+  expect(addButtonShape).toEqual({ text: "", svgCount: 1 });
+
+  const visualProperties = await expanded.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { backgroundColor: style.backgroundColor, borderTopStyle: style.borderTopStyle };
+  });
+  expect(visualProperties.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  expect(visualProperties.borderTopStyle).toBe("none");
+  await expect(expanded.locator(".queue-cover-sort-handle")).toHaveCount(0);
+});
+
+test("发布保留快照并进入归档", async ({ page, request }) => {
+  await openQueue(page);
+  const firstCard = page.locator('[data-project-id="C000127"]');
+  await firstCard.getByRole("button", { name: "发布", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "确认发布" })).toBeVisible();
+  await page.getByRole("button", { name: "发布并进入归档" }).click();
+  await expect(firstCard).toHaveCount(0);
+  await expect.poll(async () => {
+    const response = await request.get("/api/library");
+    const library = await response.json();
+    return {
+      queueIds: library.projects.map((project) => project.id),
+      archiveIds: library.archive.map((item) => item.id),
+    };
+  }).toEqual({ queueIds: ["C000128", "C000126"], archiveIds: ["C000127"] });
+});
+
+test("删除按钮从待发布移除项目但保留其它数据", async ({ page, request }) => {
+  await openQueue(page);
+  const firstCard = page.locator('[data-project-id="C000127"]');
+  await expect(firstCard.getByRole("button", { name: "删除", exact: true })).toBeVisible();
+
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("源灵感、本地封面和视频素材文件不会被删除");
+    await dialog.dismiss();
+  });
+  await firstCard.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(firstCard).toHaveCount(1);
+  expect(await order(page)).toEqual(["C000127", "C000128", "C000126"]);
+
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("确定从待发布删除");
+    await dialog.accept();
+  });
+  await firstCard.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(firstCard).toHaveCount(0);
+  await expect.poll(async () => {
+    const response = await request.get("/api/library");
+    const library = await response.json();
+    return {
+      queueIds: library.projects.map((project) => project.id),
+      inspirationIds: library.inspirations.map((item) => item.id),
+      archiveCount: library.archive.length,
+    };
+  }).toEqual({
+    queueIds: ["C000128", "C000126"],
+    inspirationIds: ["I000301", "I000302", "I000303"],
+    archiveCount: 0,
+  });
+});
+
+test("灵感卡片底部优先复制原链接，原视频入口收进三点菜单", async ({ page }) => {
+  await page.goto("/");
+  const firstInspiration = page.locator(".inspiration-card").filter({ hasText: "灵感标题只应出现在参考卡片中" });
+  await expect(firstInspiration).toHaveCount(1);
+
+  await expect(firstInspiration.locator(".card-quick-actions").getByRole("button", { name: "复制原链接", exact: true })).toBeVisible();
+  await expect(firstInspiration.locator(".card-quick-actions").getByRole("link", { name: "原视频", exact: true })).toHaveCount(0);
+
+  await firstInspiration.locator('summary[aria-label="更多操作"]').click();
+  const menuSourceLink = firstInspiration.locator(".card-overflow-menu").getByRole("link", { name: "原视频", exact: true });
+  await expect(menuSourceLink).toBeVisible();
+  await expect(menuSourceLink).toHaveAttribute("href", "https://www.douyin.com/video/reference-301");
+});
+
+test("视频灵感预览默认开声，用户可手动关闭", async ({ page, request }) => {
+  await page.addInitScript(() => {
+    const playing = new WeakSet();
+    Object.defineProperty(HTMLMediaElement.prototype, "paused", {
+      configurable: true,
+      get() {
+        return !playing.has(this);
+      },
+    });
+    HTMLMediaElement.prototype.play = function play() {
+      playing.add(this);
+      this.dispatchEvent(new Event("playing"));
+      return Promise.resolve();
+    };
+    HTMLMediaElement.prototype.pause = function pause() {
+      if (!playing.delete(this)) return;
+      this.dispatchEvent(new Event("pause"));
+    };
+  });
+  await request.post("/api/library", {
+    data: {
+      categories: ["情感", "展示面", "认知", "教程"],
+      inspirations: [{
+        ...inspirations[0],
+        id: "I000901",
+        contentType: "video",
+        title: "默认开声的视频灵感",
+        videoUrl: "https://video.example/temporary.mp4",
+        videoPreviewUrl: "/library-proxy/media?url=https%3A%2F%2Fvideo.example%2Ftemporary.mp4",
+        videoLocalPath: "/assets/covers/coffee-alley.png",
+      }],
+      projects: [],
+      archive: [],
+      activeProject: null,
+    },
+  });
+
+  await page.goto("/");
+  const videoCard = page.locator(".inspiration-card").filter({ hasText: "默认开声的视频灵感" });
+  await expect(videoCard).toHaveCount(1);
+  const videoState = await videoCard.locator("video").evaluate((video) => ({
+    muted: video.muted,
+    hasMutedAttribute: video.hasAttribute("muted"),
+    objectFit: getComputedStyle(video).objectFit,
+    preload: video.preload,
+    src: video.getAttribute("src"),
+  }));
+  expect(videoState).toEqual({
+    muted: false,
+    hasMutedAttribute: false,
+    objectFit: "cover",
+    preload: "auto",
+    src: "/assets/covers/coffee-alley.png",
+  });
+  const mediaShape = await videoCard.evaluate((card) => ({
+    cardWidth: card.style.getPropertyValue("--card-width"),
+    mediaAspect: getComputedStyle(card.querySelector(".inspiration-media")).aspectRatio,
+    objectPosition: getComputedStyle(card.querySelector("video")).objectPosition,
+  }));
+  expect(mediaShape).toEqual({ cardWidth: "", mediaAspect: "3 / 4", objectPosition: "50% 50%" });
+  const mediaPreview = videoCard.locator(".media-preview");
+  const previewVideo = videoCard.locator("video");
+  await expect(mediaPreview).not.toHaveClass(/video-ready/);
+  await expect(videoCard.locator(".media-preview > img")).toHaveCSS("opacity", "1");
+  await previewVideo.dispatchEvent("loadeddata");
+  await expect(mediaPreview).not.toHaveClass(/video-ready/);
+  await previewVideo.dispatchEvent("waiting");
+  await expect(videoCard.locator(".media-playback-status")).toHaveCount(0);
+  await expect(videoCard).not.toContainText("正在加载视频");
+  await expect(videoCard.getByRole("button", { name: "关闭声音", exact: true })).toHaveCount(1);
+  await videoCard.getByRole("button", { name: "播放预览", exact: true }).click();
+  await expect(mediaPreview).toHaveClass(/video-ready/);
+  await expect(videoCard.getByRole("button", { name: "暂停预览", exact: true })).toBeVisible();
+  await videoCard.getByRole("button", { name: "暂停预览", exact: true }).click();
+  await expect(videoCard.getByRole("button", { name: "播放预览", exact: true })).toBeVisible();
+  await page.reload();
+  await expect(videoCard).toHaveCount(1);
+  await page.mouse.move(1, 1);
+  await videoCard.locator(".media-hover-surface").hover();
+  await expect(videoCard.getByRole("button", { name: "暂停预览", exact: true })).toBeVisible();
+});
+
+test("本地视频文件支持 Range 分段读取", async ({ request }) => {
+  const videoDir = path.join(prototypeRoot, ".qa-library", "视频内容创作中台 Demo.library", "assets/videos");
+  await mkdir(videoDir, { recursive: true });
+  await writeFile(path.join(videoDir, "range-test.mp4"), Buffer.alloc(128 * 1024, 7));
+
+  const response = await request.get("/library-assets/assets/videos/range-test.mp4", {
+    headers: { range: "bytes=100-1099" },
+  });
+  expect(response.status()).toBe(206);
+  expect(response.headers()["accept-ranges"]).toBe("bytes");
+  expect(response.headers()["content-range"]).toBe(`bytes 100-1099/${128 * 1024}`);
+  expect(response.headers()["content-type"]).toContain("video/mp4");
+  expect((await response.body()).length).toBe(1000);
+});
+
+test("灵感库宽屏最多显示五列", async ({ page, request }) => {
+  const sixInspirations = Array.from({ length: 6 }, (_, index) => ({
+    ...inspirations[index % inspirations.length],
+    id: `I0008${index + 10}`,
+    title: `五列上限验证 ${index + 1}`,
+  }));
+  await request.post("/api/library", {
+    data: {
+      categories: ["情感", "展示面", "认知", "教程"],
+      inspirations: sixInspirations,
+      projects: [],
+      archive: [],
+      activeProject: null,
+    },
+  });
+
+  await page.setViewportSize({ width: 1800, height: 1000 });
+  await page.goto("/");
+  const cards = page.locator(".inspiration-grid .inspiration-card");
+  await expect(cards).toHaveCount(6);
+  const rows = await cards.evaluateAll((elements) => elements.map((element) => Math.round(element.getBoundingClientRect().top)));
+  expect(rows.filter((top) => top === rows[0])).toHaveLength(5);
+  expect(new Set(rows).size).toBe(2);
+  const layout = await page.locator(".inspiration-grid").evaluate((grid) => {
+    const gridRect = grid.getBoundingClientRect();
+    const firstCard = grid.querySelector(".inspiration-card").getBoundingClientRect();
+    const columns = getComputedStyle(grid).gridTemplateColumns.split(" ");
+    return {
+      columnCount: columns.length,
+      cardWidth: Math.round(firstCard.width),
+      fillsGrid: Math.abs((firstCard.width * 5) + (14 * 4) - gridRect.width) <= 2,
+    };
+  });
+  expect(layout.columnCount).toBe(5);
+  expect(layout.cardWidth).toBeGreaterThan(228);
+  expect(layout.fillsGrid).toBe(true);
+});
+
+test("创作页可以从灵感库手动添加灵感参考", async ({ page, request }) => {
+  await request.post("/api/library", {
+    data: {
+      categories: ["情感", "展示面", "认知", "教程"],
+      inspirations,
+      projects: [],
+      archive: [],
+      activeProject: {
+        id: "C000777",
+        title: "手动补灵感的创作",
+        body: "",
+        covers: [],
+        primaryCoverId: null,
+        references: [],
+        category: "",
+        categoryAssignedByUser: false,
+        modified: "刚刚",
+      },
+    },
+  });
+
+  await page.goto("/");
+  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await expect(page.locator(".creation-reference-grid .inspiration-card")).toHaveCount(0);
+  await page.getByRole("button", { name: "添加灵感", exact: true }).click();
+  const picker = page.getByRole("dialog", { name: "添加灵感参考" });
+  await expect(picker).toBeVisible();
+  await expect(picker.locator(".inspiration-picker-item")).toHaveCount(3);
+  const categoryFilter = picker.getByLabel("灵感参考分类筛选");
+  await expect(categoryFilter.getByRole("button", { name: "全部分类 3", exact: true })).toBeVisible();
+  await expect(categoryFilter.getByRole("button", { name: "展示面 1", exact: true })).toBeVisible();
+  await categoryFilter.getByRole("button", { name: "展示面 1", exact: true }).click();
+  await expect(picker.locator(".inspiration-picker-item")).toHaveCount(1);
+  await expect(picker.locator(".inspiration-picker-item")).toContainText("第二条完整灵感卡片");
+  await picker.getByRole("button", { name: /第二条完整灵感卡片/ }).click();
+  await expect(picker).toHaveCount(0);
+  await expect(page.locator(".creation-reference-grid .inspiration-card")).toHaveCount(1);
+  await expect(page.locator(".creation-reference-grid")).toContainText("第二条完整灵感卡片");
+  await expect(page.locator(".references-section .section-heading")).toContainText("1 条关联灵感");
+
+  await page.getByRole("button", { name: "添加灵感", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "添加灵感参考" }).locator(".inspiration-picker-item")).toHaveCount(2);
+  await expect.poll(async () => {
+    const library = await (await request.get("/api/library")).json();
+    return library.activeProject.references.map((item) => item.id);
+  }).toEqual(["I000302"]);
+});
+
+test("从灵感开始创作保持编辑区空白并展示完整参考卡片", async ({ page, request }) => {
+  await page.goto("/");
+  const firstInspiration = page.locator(".inspiration-card").first();
+  await firstInspiration.getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByRole("button", { name: /开始新的创作/ }).click();
+
+  await expect(page.locator(".creation-shell .title-input")).toHaveValue("");
+  await expect(page.locator(".creation-shell .body-section textarea")).toHaveValue("");
+  await expect(page.locator(".creation-shell .cover-option")).toHaveCount(0);
+  await expect(page.locator(".creation-reference-grid .inspiration-card")).toHaveCount(1);
+  await expect(page.locator(".creation-reference-grid")).toContainText("灵感标题只应出现在参考卡片中");
+  await expect(page.locator(".creation-reference-grid .inspiration-media img")).toBeVisible();
+  await expect(page.locator(".creation-shell")).not.toContainText(/C\d{6}/);
+
+  await expect.poll(async () => {
+    const response = await request.get("/api/library");
+    const activeProject = (await response.json()).activeProject;
+    if (!activeProject) return null;
+    return {
+      title: activeProject.title,
+      body: activeProject.body,
+      category: activeProject.category,
+      covers: activeProject.covers,
+      referenceIds: activeProject.references.map((item) => item.id),
+    };
+  }).toEqual({ title: "", body: "", category: "", covers: [], referenceIds: ["I000301"] });
+});
+
+test("创作页灵感参考保持固定三列和统一卡片宽度", async ({ page, request }) => {
+  await request.post("/api/library", {
+    data: {
+      categories: ["情感", "展示面", "认知", "教程"],
+      inspirations,
+      projects,
+      archive: [],
+      activeProject: {
+        id: "C000900",
+        title: "",
+        body: "",
+        covers: [],
+        primaryCoverId: null,
+        references: inspirations,
+        category: "",
+        categoryAssignedByUser: false,
+        modified: "刚刚",
+      },
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: "创作", exact: true }).click();
+  const grid = page.locator(".creation-reference-grid");
+  await expect(grid.locator(".inspiration-card")).toHaveCount(3);
+  const flowStyle = await grid.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { display: style.display, flexWrap: style.flexWrap, gridTemplateColumns: style.gridTemplateColumns };
+  });
+  expect(flowStyle).toMatchObject({ display: "grid", flexWrap: "nowrap", gridTemplateColumns: "228px 228px 228px" });
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await expect(grid.locator(".inspiration-card")).toHaveCount(3);
+  await expect(page.locator(".creation-shell")).not.toContainText(/C\d{6}/);
+  await page.screenshot({ path: "qa/creation-references-1440x900.png", fullPage: true });
+});
+
+test("dragging 03 to 01 reorders before release and persists", async ({ page, request }) => {
+  await openQueue(page);
+  await dragToCard(page, "C000126", "C000127");
+  await expect.poll(() => order(page)).toEqual(["C000126", "C000127", "C000128"]);
+  await expect.poll(() => orderWithPriority(page)).toEqual([
+    { id: "C000126", priority: "01" },
+    { id: "C000127", priority: "02" },
+    { id: "C000128", priority: "03" },
+  ]);
+  await page.mouse.up();
+
+  await expect.poll(async () => {
+    const response = await request.get("/api/library");
+    return (await response.json()).projects.map((project) => project.id);
+  }).toEqual(["C000126", "C000127", "C000128"]);
+
+  await page.reload();
+  await page.getByRole("button", { name: /^待发布/ }).click();
+  await expect.poll(() => order(page)).toEqual(["C000126", "C000127", "C000128"]);
+  await expect.poll(() => orderWithPriority(page)).toEqual([
+    { id: "C000126", priority: "01" },
+    { id: "C000127", priority: "02" },
+    { id: "C000128", priority: "03" },
+  ]);
+});
+
+test("dragging 01 to 03 reorders before release and persists", async ({ page, request }) => {
+  await openQueue(page);
+  await dragToCard(page, "C000127", "C000126", "card");
+  await expect.poll(() => order(page)).toEqual(["C000128", "C000126", "C000127"]);
+  await expect.poll(() => orderWithPriority(page)).toEqual([
+    { id: "C000128", priority: "01" },
+    { id: "C000126", priority: "02" },
+    { id: "C000127", priority: "03" },
+  ]);
+  await page.mouse.up();
+
+  await expect.poll(async () => {
+    const response = await request.get("/api/library");
+    return (await response.json()).projects.map((project) => project.id);
+  }).toEqual(["C000128", "C000126", "C000127"]);
+
+  await page.reload();
+  await page.getByRole("button", { name: /^待发布/ }).click();
+  await expect.poll(() => orderWithPriority(page)).toEqual([
+    { id: "C000128", priority: "01" },
+    { id: "C000126", priority: "02" },
+    { id: "C000127", priority: "03" },
+  ]);
+});
+
+test("desktop viewport screenshots remain free of overlap and overflow", async ({ page }) => {
+  for (const viewport of [
+    { width: 1280, height: 800 },
+    { width: 1440, height: 900 },
+    { width: 1600, height: 1000 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await openQueue(page);
+    const card = page.locator('[data-project-id="C000128"]');
+    await card.getByRole("button", { name: "展开封面 6 张" }).first().click();
+    await expect(card.getByTestId("expanded-covers-C000128").locator("img")).toHaveCount(6);
+
+    const layout = await page.evaluate(() => {
+      const cardElement = document.querySelector('[data-project-id="C000128"]');
+      const coverElement = cardElement.querySelector(".queue-cover-gallery-expanded");
+      const copyElement = cardElement.querySelector(".queue-copy");
+      const actionElement = cardElement.querySelector(".queue-actions");
+      const rect = (element) => {
+        const box = element.getBoundingClientRect();
+        return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+      };
+      const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+      const cover = rect(coverElement);
+      const copy = rect(copyElement);
+      const actions = rect(actionElement);
+      const card = rect(cardElement);
+      return {
+        horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth,
+        coverCopyOverlap: overlaps(cover, copy),
+        coverActionOverlap: overlaps(cover, actions),
+        copyActionOverlap: overlaps(copy, actions),
+        cardHeight: Math.round(card.bottom - card.top),
+      };
+    });
+    expect(layout).toMatchObject({
+      horizontalOverflow: false,
+      coverCopyOverlap: false,
+      coverActionOverlap: false,
+      copyActionOverlap: false,
+    });
+    expect(layout.cardHeight).toBeGreaterThan(0);
+
+    await page.screenshot({
+      path: `qa/queue-${viewport.width}x${viewport.height}.png`,
+      fullPage: true,
+    });
+  }
+});

@@ -1,0 +1,73 @@
+{
+  "name": "video-content-creation-studio",
+  "productName": "视频内容创作中台",
+  "description": "面向真实内容生产流程的本地视频创作工作台",
+  "author": "引力环球",
+  "version": "0.1.0",
+  "license": "MIT",
+  "homepage": "https://github.com/maxmaximage-hash/video-content-creation-studio#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maxmaximage-hash/video-content-creation-studio.git"
+  },
+  "bugs": {
+    "url": "https://github.com/maxmaximage-hash/video-content-creation-studio/issues"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.19 <25"
+  },
+  "main": "desktop/main.mjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test:unit": "node --test tests/*.test.mjs",
+    "test:ui": "playwright test",
+    "test": "npm run test:unit && npm run test:ui && npm run build",
+    "docs:screenshots": "node scripts/capture-docs.mjs",
+    "desktop:pack": "node scripts/package-desktop.mjs",
+    "desktop:pack:arm64": "node scripts/package-desktop.mjs --arch arm64",
+    "desktop:pack:x64": "node scripts/package-desktop.mjs --arch x64",
+    "desktop:install": "node scripts/install-macos.mjs --open"
+  },
+  "build": {
+    "appId": "com.yinli.video-content-creation-studio",
+    "productName": "视频内容创作中台",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/client/**/*",
+      "desktop/**/*",
+      "server/**/*",
+      "vite.config.mjs",
+      "package.json",
+      "public/app-icon.png"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/app-icon.icns",
+      "target": [
+        "dir"
+      ]
+    }
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@vitejs/plugin-react": "5.0.4",
+    "lucide-react": "^1.25.0",
+    "playwright": "^1.61.1",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "vite": "6.4.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
+  }
+}

@@ -1,0 +1,46 @@
+.inspiration-card.is-linked {
+  border-color: rgba(214, 179, 106, .62);
+  box-shadow:
+    inset 0 0 0 1px rgba(214, 179, 106, .28),
+    0 14px 30px rgba(0, 0, 0, .24);
+}
+
+.inspiration-card.is-linked:hover {
+  border-color: rgba(224, 193, 125, .82);
+  box-shadow:
+    inset 0 0 0 1px rgba(224, 193, 125, .38),
+    0 20px 42px rgba(0, 0, 0, .34);
+}
+
+.inspiration-filter-empty {
+  min-height: 240px;
+}
+
+.inspiration-card .parse-status-line.retry_wait {
+  border-color: rgba(113, 154, 205, .34);
+  background: rgba(76, 125, 187, .09);
+}
+
+.inspiration-card .parse-status-line.retry_wait span {
+  color: #86acd9;
+}
+
+.inspiration-card .parse-status-line.content_unavailable {
+  border-color: rgba(143, 143, 150, .24);
+  background: rgba(118, 118, 128, .08);
+}
+
+@media (max-width: 1120px) {
+  .inspiration-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .inspiration-toolbar .search-box {
+    flex: 1 1 280px;
+  }
+
+  .inspiration-toolbar .segmented-control {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
