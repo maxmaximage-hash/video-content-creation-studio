@@ -10,6 +10,11 @@ import {
   platformKeyFromValue,
 } from "./platforms/index.mjs";
 import { sanitizeDiagnostic } from "./extraction-quality.mjs";
+import {
+  canonicalProfileWorkUrl,
+  normalizeProfileEntries,
+  profileContainerSelector,
+} from "./profile-scanner.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -131,6 +136,14 @@ export function createAuthCaptureManager(options = {}) {
     return target;
   }
 
+  // A platform's default CDP port is only trusted after this process launched it
+  // or its listener can be matched to the canonical profile.  A different Chrome
+  // instance can legitimately occupy the fixed port; never terminate that process.
+  function sessionPort(key, session = sessions.get(key)) {
+    const candidate = Number(session?.port);
+    return Number.isInteger(candidate) && candidate > 0 ? candidate : platformConfig(key).port;
+  }
+
   async function hasProfile(key) {
     try {
       return (await fsApi.stat(profilePath(key))).isDirectory();
@@ -145,18 +158,18 @@ export function createAuthCaptureManager(options = {}) {
     return response.json();
   }
 
-  async function cdpOnline(key) {
+  async function cdpOnline(key, port = sessionPort(key)) {
     try {
-      await cdpJson(platformConfig(key).port, "/json/version");
+      await cdpJson(port, "/json/version");
       return true;
     } catch {
       return false;
     }
   }
 
-  async function activeUrls(key) {
+  async function activeUrls(key, port = sessionPort(key)) {
     try {
-      const tabs = await cdpJson(platformConfig(key).port, "/json/list");
+      const tabs = await cdpJson(port, "/json/list");
       const config = platformConfig(key);
       return tabs
         .filter((tab) => !tab?.type || tab.type === "page")
@@ -175,10 +188,10 @@ export function createAuthCaptureManager(options = {}) {
     }
   }
 
-  async function activeChallengeHealth(key) {
+  async function activeChallengeHealth(key, port = sessionPort(key)) {
     let targets = [];
     try {
-      targets = await cdpJson(platformConfig(key).port, "/json/list");
+      targets = await cdpJson(port, "/json/list");
     } catch {
       return null;
     }
@@ -195,24 +208,24 @@ export function createAuthCaptureManager(options = {}) {
     };
   }
 
-  async function cdpUsable(key) {
+  async function cdpUsable(key, port = sessionPort(key)) {
     try {
-      await cdpJson(platformConfig(key).port, "/json/version");
-      const tabs = await cdpJson(platformConfig(key).port, "/json/list");
+      await cdpJson(port, "/json/version");
+      const tabs = await cdpJson(port, "/json/list");
       return Array.isArray(tabs) && tabs.length > 0;
     } catch {
       return false;
     }
   }
 
-  async function waitForCdp(key, timeoutMs = 12000, { usable = true } = {}) {
+  async function waitForCdp(key, timeoutMs = 12000, { usable = true, port = sessionPort(key) } = {}) {
     const started = Date.now();
     let lastError;
     while (Date.now() - started < timeoutMs) {
       try {
-        const version = await cdpJson(platformConfig(key).port, "/json/version");
+        const version = await cdpJson(port, "/json/version");
         if (!usable) return version;
-        const tabs = await cdpJson(platformConfig(key).port, "/json/list");
+        const tabs = await cdpJson(port, "/json/list");
         if (Array.isArray(tabs) && tabs.length > 0) return version;
         lastError = new Error("专用采集浏览器没有可用页面");
       } catch (error) {
@@ -223,65 +236,90 @@ export function createAuthCaptureManager(options = {}) {
     throw lastError || new Error("专用采集浏览器未启动");
   }
 
-  async function waitForCdpOffline(key, timeoutMs = 5000) {
+  async function waitForCdpOffline(key, timeoutMs = 5000, port = sessionPort(key)) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
-      if (!await cdpOnline(key)) return;
+      if (!await cdpOnline(key, port)) return;
       await sleep(150);
     }
     throw new Error("专用采集浏览器旧会话未能停止");
   }
 
+  async function listeningPids(port) {
+    const result = await execFileImpl("lsof", [
+      "-nP",
+      `-iTCP:${port}`,
+      "-sTCP:LISTEN",
+      "-t",
+    ]).catch(() => ({ stdout: "" }));
+    return String(result?.stdout || "")
+      .split(/\s+/)
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 1);
+  }
+
+  async function dedicatedListenerOwnedByProfile(key, port) {
+    if (options.assumeDedicatedCdp) return true;
+    const pids = await listeningPids(port);
+    if (!pids.length) return false;
+    for (const pid of pids) {
+      const detail = await execFileImpl("ps", ["-p", String(pid), "-o", "command="]).catch(() => ({ stdout: "" }));
+      if (matchesDedicatedBrowserCommand(detail?.stdout, { port, userDataDir: profilePath(key) })) return true;
+    }
+    return false;
+  }
+
+  async function availableFallbackPort(key) {
+    const config = platformConfig(key);
+    for (let offset = 100; offset < 300; offset += 1) {
+      const port = config.port + offset;
+      if (!(await listeningPids(port)).length) return port;
+    }
+    throw new Error("没有可用的专用采集浏览器端口，请关闭多余的浏览器窗口后重试");
+  }
+
   async function stopDedicatedProcess(key, session) {
     const config = platformConfig(key);
+    const port = sessionPort(key, session);
     if (options.terminateDedicatedProcess) {
       await options.terminateDedicatedProcess({
         key,
-        port: config.port,
+        port,
         userDataDir: profilePath(key),
         session,
       });
-      await waitForCdpOffline(key);
+      await waitForCdpOffline(key, 5000, port);
       return;
     }
 
     if (session?.process?.pid) {
       session.process.kill?.("SIGTERM");
-      await waitForCdpOffline(key);
+      await waitForCdpOffline(key, 5000, port);
       return;
     }
 
-    const result = await execFileImpl("lsof", [
-      "-nP",
-      `-iTCP:${config.port}`,
-      "-sTCP:LISTEN",
-      "-t",
-    ]).catch(() => ({ stdout: "" }));
-    const pids = String(result?.stdout || "")
-      .split(/\s+/)
-      .map((value) => Number(value))
-      .filter((value) => Number.isInteger(value) && value > 1);
+    const pids = await listeningPids(port);
     let stopped = false;
     for (const pid of pids) {
       const detail = await execFileImpl("ps", ["-p", String(pid), "-o", "command="]).catch(() => ({ stdout: "" }));
       if (!matchesDedicatedBrowserCommand(detail?.stdout, {
-        port: config.port,
+        port,
         userDataDir: profilePath(key),
       })) continue;
       killImpl(pid, "SIGTERM");
       stopped = true;
     }
     if (!stopped) throw new Error("检测到无法确认归属的浏览器端口，未执行重启");
-    await waitForCdpOffline(key);
+    await waitForCdpOffline(key, 5000, port);
   }
 
-  async function launchProcess(key) {
+  async function launchProcess(key, { port = platformConfig(key).port } = {}) {
     const config = platformConfig(key);
     const { chromium } = await loadPlaywright();
     const userDataDir = profilePath(key);
     await fsApi.mkdir(userDataDir, { recursive: true });
     const child = spawnImpl(chromium.executablePath(), [
-      `--remote-debugging-port=${config.port}`,
+      `--remote-debugging-port=${port}`,
       `--user-data-dir=${userDataDir}`,
       "--no-first-run",
       "--no-default-browser-check",
@@ -291,8 +329,8 @@ export function createAuthCaptureManager(options = {}) {
       config.loginUrl,
     ], { detached: true, stdio: "ignore" });
     child.unref?.();
-    await waitForCdp(key);
-    const session = { port: config.port, process: child, openedAt: now().toISOString() };
+    await waitForCdp(key, 12000, { port });
+    const session = { port, process: child, openedAt: now().toISOString() };
     sessions.set(key, session);
     return session;
   }
@@ -303,8 +341,16 @@ export function createAuthCaptureManager(options = {}) {
       const previous = sessions.get(key);
       sessions.delete(key);
       await previous?.browser?.close?.().catch(() => {});
-      if (await cdpOnline(key)) await stopDedicatedProcess(key, previous);
-      return launchProcess(key);
+      const port = sessionPort(key, previous);
+      if (await cdpOnline(key, port)) {
+        try {
+          await stopDedicatedProcess(key, previous);
+        } catch (error) {
+          if (!/无法确认归属的浏览器端口/.test(String(error?.message || error))) throw error;
+          return launchProcess(key, { port: await availableFallbackPort(key) });
+        }
+      }
+      return launchProcess(key, { port });
     })().finally(() => recovering.delete(key));
     recovering.set(key, task);
     return task;
@@ -313,15 +359,18 @@ export function createAuthCaptureManager(options = {}) {
   async function ensureProcess(key) {
     const config = platformConfig(key);
     const existing = sessions.get(key);
-    if (existing && await cdpUsable(key)) return { session: existing, recovered: false };
+    if (existing && await cdpUsable(key, existing.port)) return { session: existing, recovered: false };
     sessions.delete(key);
-    if (await cdpUsable(key)) {
+    if (await cdpUsable(key, config.port) && await dedicatedListenerOwnedByProfile(key, config.port)) {
       const session = { port: config.port, process: null, openedAt: now().toISOString() };
       sessions.set(key, session);
       return { session, recovered: false };
     }
-    if (await cdpOnline(key)) {
-      return { session: await restartDedicatedProcess(key), recovered: true };
+    if (await cdpOnline(key, config.port)) {
+      if (await dedicatedListenerOwnedByProfile(key, config.port)) {
+        return { session: await restartDedicatedProcess(key), recovered: true };
+      }
+      return { session: await launchProcess(key, { port: await availableFallbackPort(key) }), recovered: true };
     }
     return { session: await launchProcess(key), recovered: false };
   }
@@ -610,10 +659,22 @@ export function createAuthCaptureManager(options = {}) {
         finalUrl = page.url();
         const html = await page.content();
         const resources = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name).slice(-300)).catch(() => []);
-        const videoDuration = await page.evaluate(() => {
-          const video = Array.from(document.querySelectorAll("video")).find((item) => Number.isFinite(item.duration) && item.duration > 0);
-          return video ? Math.round(video.duration) : "";
-        }).catch(() => "");
+        const rawMediaSnapshot = await page.evaluate(() => ({
+          videos: Array.from(document.querySelectorAll("video")).map((item) => ({
+            src: item.currentSrc || item.src || "",
+            poster: item.poster || "",
+            duration: Number.isFinite(item.duration) && item.duration > 0 ? Math.round(item.duration) : "",
+          })).filter((item) => item.src || item.poster),
+          images: Array.from(document.querySelectorAll("img")).slice(0, 300).map((item) => ({
+            src: item.currentSrc || item.src || "",
+            alt: item.alt || "",
+          })).filter((item) => item.src),
+        })).catch(() => ({ videos: [], images: [] }));
+        const mediaSnapshot = {
+          videos: Array.isArray(rawMediaSnapshot?.videos) ? rawMediaSnapshot.videos : [],
+          images: Array.isArray(rawMediaSnapshot?.images) ? rawMediaSnapshot.images : [],
+        };
+        const videoDuration = mediaSnapshot.videos.find((item) => item.duration)?.duration || "";
         if (health.needsUserAction) await page.bringToFront();
         return {
           ...health,
@@ -621,6 +682,7 @@ export function createAuthCaptureManager(options = {}) {
           finalUrl,
           bodyText: health.bodyText,
           resources,
+          mediaSnapshot,
           videoDuration,
           responseJsonCandidates,
           recoveryCount,
@@ -714,6 +776,88 @@ export function createAuthCaptureManager(options = {}) {
     };
   }
 
+  async function scanProfile(url, key, options = {}) {
+    const navigationUrl = normalizePlatformCaptureUrl(url, key);
+    if (!navigationUrl) throw new Error("主页链接无效");
+    if (!await hasProfile(key)) {
+      return { authState: "login_required", needsUserAction: true, errorCode: "AUTH_PROFILE_MISSING", candidates: [] };
+    }
+    const context = await contextFor(key, { start: true });
+    const session = sessions.get(key);
+    let page = session.profilePage;
+    if (!page || page.isClosed()) {
+      page = await context.newPage();
+      session.profilePage = page;
+    }
+    const response = await page.goto(navigationUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.waitForTimeout(3500);
+    const health = await inspectPage(key, page, response?.status() || 200);
+    if (health.needsUserAction || health.authState !== "authenticated") {
+      await page.bringToFront();
+      return { ...health, candidates: [], finalUrl: page.url() };
+    }
+    const directWorkUrl = canonicalProfileWorkUrl(key, page.url());
+    if (directWorkUrl) {
+      return {
+        authState: "authenticated",
+        needsUserAction: false,
+        errorCode: "",
+        finalUrl: page.url(),
+        endedBy: "single_work",
+        mode: "single_work",
+        candidates: [{
+          url: directWorkUrl,
+          title: String(health.title || "").trim().slice(0, 160),
+          coverUrl: "",
+        }],
+      };
+    }
+    const found = new Map();
+    const maxRounds = Math.max(5, Math.min(Number(options.maxRounds) || 120, 300));
+    const maxItems = Math.max(1, Math.min(Number(options.maxItems) || 5000, 20000));
+    let stableRounds = 0;
+    let previousHeight = 0;
+    let endedBy = "limit";
+    for (let round = 1; round <= maxRounds && found.size < maxItems; round += 1) {
+      const selector = profileContainerSelector(key);
+      const snapshot = await page.evaluate((containerSelector) => {
+        const container = document.querySelector(containerSelector) || document.body;
+        const anchors = Array.from(container.querySelectorAll("a[href]"));
+        const entries = anchors.slice(0, 10000).map((anchor) => {
+          const image = anchor.querySelector("img");
+          return {
+            href: anchor.href || anchor.getAttribute("href") || "",
+            text: (anchor.innerText || anchor.textContent || image?.alt || "").trim(),
+            coverUrl: image?.currentSrc || image?.src || "",
+            profileMatch: container !== document.body,
+          };
+        });
+        const scrolling = document.scrollingElement || document.documentElement;
+        return { entries, height: scrolling.scrollHeight, top: scrolling.scrollTop, viewport: window.innerHeight };
+      }, selector);
+      for (const candidate of normalizeProfileEntries(key, snapshot.entries, page.url())) found.set(candidate.url, candidate);
+      options.onProgress?.({ round, foundCount: found.size, scrollHeight: snapshot.height });
+      const atBottom = snapshot.top + snapshot.viewport >= snapshot.height - 24;
+      stableRounds = snapshot.height === previousHeight && atBottom ? stableRounds + 1 : 0;
+      previousHeight = snapshot.height;
+      if (stableRounds >= 4) {
+        endedBy = "end";
+        break;
+      }
+      await page.evaluate(() => window.scrollBy({ top: Math.max(window.innerHeight * 0.88, 720), behavior: "smooth" }));
+      await page.waitForTimeout(Math.max(700, Math.min(Number(options.intervalMs) || 1400, 5000)));
+    }
+    return {
+      authState: "authenticated",
+      needsUserAction: false,
+      errorCode: "",
+      finalUrl: page.url(),
+      endedBy,
+      mode: "profile",
+      candidates: [...found.values()],
+    };
+  }
+
   return {
     authRoot,
     hasProfile,
@@ -722,5 +866,6 @@ export function createAuthCaptureManager(options = {}) {
     status,
     capturePage,
     authenticatedHeaders,
+    scanProfile,
   };
 }

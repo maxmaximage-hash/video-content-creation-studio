@@ -317,13 +317,13 @@ test("发布保留快照并进入归档", async ({ page, request }) => {
   }).toEqual({ queueIds: ["C000128", "C000126"], archiveIds: ["C000127"] });
 });
 
-test("删除按钮从待发布移除项目但保留其它数据", async ({ page, request }) => {
+test("删除按钮彻底移除待发布内容并保留其它数据", async ({ page, request }) => {
   await openQueue(page);
   const firstCard = page.locator('[data-project-id="C000127"]');
   await expect(firstCard.getByRole("button", { name: "删除", exact: true })).toBeVisible();
 
   page.once("dialog", async (dialog) => {
-    expect(dialog.message()).toContain("源灵感、本地封面和视频素材文件不会被删除");
+    expect(dialog.message()).toContain("资料库文件都会立即删除");
     await dialog.dismiss();
   });
   await firstCard.getByRole("button", { name: "删除", exact: true }).click();
@@ -331,7 +331,7 @@ test("删除按钮从待发布移除项目但保留其它数据", async ({ page,
   expect(await order(page)).toEqual(["C000127", "C000128", "C000126"]);
 
   page.once("dialog", async (dialog) => {
-    expect(dialog.message()).toContain("确定从待发布删除");
+    expect(dialog.message()).toContain("确定彻底删除");
     await dialog.accept();
   });
   await firstCard.getByRole("button", { name: "删除", exact: true }).click();

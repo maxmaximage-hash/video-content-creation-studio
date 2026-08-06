@@ -1,0 +1,26 @@
+{
+  "ffmpeg": {
+    "version": "imageio-ffmpeg-0.6.0",
+    "arm64": {
+      "url": "https://files.pythonhosted.org/packages/40/5c/f3d8a657d362cc93b81aab8feda487317da5b5d31c0e1fdfd5e986e55d17/imageio_ffmpeg-0.6.0-py3-none-macosx_11_0_arm64.whl",
+      "sha256": "b1ae3173414b5fc5f538a726c4e48ea97edc0d2cdc11f103afee655c463fa742"
+    },
+    "x64": {
+      "url": "https://files.pythonhosted.org/packages/da/58/87ef68ac83f4c7690961bce288fd8e382bc5f1513860fc7f90a9c1c1c6bf/imageio_ffmpeg-0.6.0-py3-none-macosx_10_9_intel.macosx_10_9_x86_64.whl",
+      "sha256": "9d2baaf867088508d4a3458e61eeb30e945c4ad8016025545f66c4b5aaef0a61"
+    }
+  },
+  "whisper_cpp": {
+    "version": "1.8.6",
+    "url": "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.8.6.tar.gz",
+    "sha256": "f8e632016ceae556f3132a16c7f704be1e7715595041f474fa81a2b64c1abf7c"
+  },
+  "whisper_model": {
+    "version": "ggml-small",
+    "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+    "mirrors": [
+      "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"
+    ],
+    "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+  }
+}

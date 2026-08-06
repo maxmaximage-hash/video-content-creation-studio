@@ -3,12 +3,22 @@ import { constants as fsConstants, createReadStream, createWriteStream } from "n
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { extractXiaohongshuFromHtml, extractXiaohongshuFromObjects } from "./server/xiaohongshu.mjs";
 import { authPlatformKey, createAuthCaptureManager } from "./server/auth-capture.mjs";
 import { classifyDouyinFallbackResponse } from "./server/platforms/douyin.mjs";
+import {
+  bilibiliPublicMetadata,
+  captureJsonCandidates,
+  fetchYoutubeCaption,
+  parseGenericPlatformCapture,
+  platformItemId as genericPlatformItemId,
+  youtubePublicMetadata,
+  youtubeCaptionTrackUrl,
+} from "./server/multi-platform-extractor.mjs";
 import { createPlatformTaskScheduler } from "./server/extraction-scheduler.mjs";
 import {
   evaluateExtractionQuality,
@@ -20,13 +30,53 @@ import {
 } from "./server/extraction-quality.mjs";
 import { createLibraryManager } from "./server/library-manager.mjs";
 import {
+  finishHardDelete,
+  purgeLegacyDeleteStaging,
+  rollbackStagedContentUnit,
+  stageContentUnitForDeletion,
+  stripContentFromLibrary,
+} from "./server/library-hard-delete.mjs";
+import { createTranscriptionService } from "./server/transcription-service.mjs";
+import {
   isPathInside,
   validateContentId,
   validateProjectAssetPath,
   validateReadableLibraryAssetPath,
 } from "./server/path-security.mjs";
 
+const projectRoot = path.dirname(fileURLToPath(import.meta.url));
+const packageMetadata = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
+
+function gitOutput(args, fallback = "") {
+  try {
+    return execFileSync("git", args, {
+      cwd: projectRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return fallback;
+  }
+}
+
+function buildMetadata() {
+  const commit = String(process.env.VIDEO_STUDIO_BUILD_COMMIT || gitOutput(["rev-parse", "--short=10", "HEAD"], "source")).trim();
+  const dirtyOverride = String(process.env.VIDEO_STUDIO_BUILD_DIRTY || "").trim().toLowerCase();
+  const dirty = dirtyOverride
+    ? ["1", "true", "yes"].includes(dirtyOverride)
+    : Boolean(gitOutput(["status", "--porcelain"]));
+  return {
+    version: packageMetadata.version,
+    commit,
+    dirty,
+  };
+}
+
+const currentBuild = buildMetadata();
+
 const extractionScheduler = createPlatformTaskScheduler();
+const profileScanJobs = new Map();
+const transcriptionService = createTranscriptionService({ projectRoot });
 const discardedExtractionIds = new Set();
 const deletionCleanupStates = new Map();
 const deletionCleanupTasks = new Map();
@@ -78,7 +128,9 @@ function canonicalSourceIdentity({ platform = "", platformItemId = "", originalU
   const itemId = String(platformItemId || (
     key === "xiaohongshu"
       ? xiaohongshuNoteId(resolvedUrl) || xiaohongshuNoteId(originalUrl)
-      : extractAwemeId(resolvedUrl || originalUrl)
+      : key === "douyin"
+        ? extractAwemeId(resolvedUrl || originalUrl)
+        : genericPlatformItemId(key, resolvedUrl || originalUrl)
   )).trim();
   const normalizedUrl = normalizedSourceUrl(resolvedUrl || originalUrl);
   return {
@@ -383,12 +435,12 @@ function extractFromObject(root) {
   return result;
 }
 
-async function downloadCover(coverUrl, itemId, evidence, libraryManager) {
+async function downloadCover(coverUrl, itemId, evidence, libraryManager, referer = "https://www.douyin.com/", sessionHeaders = {}) {
   if (!coverUrl || !itemId) return {};
   try {
     const storage = await libraryManager.ensureCurrentLibrary();
     const contentId = validateContentId(itemId);
-    const response = await fetch(coverUrl, { headers: { ...requestHeaders, referer: "https://www.douyin.com/" } });
+    const response = await fetch(coverUrl, { headers: { ...requestHeaders, ...sessionHeaders, referer: sessionHeaders.referer || referer } });
     if (!response.ok) {
       evidence.push(`封面下载失败: HTTP ${response.status}`);
       return {};
@@ -582,14 +634,28 @@ function replaceLocalContentImages(currentItem, incomingImages) {
     }));
 }
 
-function mergeImageAssets(currentItem, images) {
+function mergeImageAssets(currentItem, images, videoLocalPath = "") {
   const otherAssets = (Array.isArray(currentItem?.mediaAssets) ? currentItem.mediaAssets : [])
-    .filter((asset) => asset?.role !== "content_image");
+    .filter((asset) => !["content_image", "captured_video"].includes(asset?.role));
+  const relativeVideoPath = String(videoLocalPath || "")
+    .replace(/^\/library-assets\//, "")
+    .replace(/^\/+/, "");
+  const videoAsset = relativeVideoPath
+    ? [{
+        id: `${currentItem.id}-captured-video`,
+        role: "captured_video",
+        localPath: `/library-assets/${relativeVideoPath}`,
+        relativePath: relativeVideoPath,
+        order: 1,
+        version: Number(currentItem.mediaVersion) || 1,
+      }]
+    : [];
   return [
     ...otherAssets,
     ...images
       .map((image, index) => localContentImage(image, currentItem.id, index + 1))
       .filter(Boolean),
+    ...videoAsset,
   ];
 }
 
@@ -623,9 +689,14 @@ function matchingSourceItems(items, identity, originalUrl) {
 
 function serverInspiration({ id, originalUrl, category, identity }) {
   const now = new Date().toISOString();
-  const platform = identity.platformKey === "douyin"
-    ? "抖音"
-    : identity.platformKey === "xiaohongshu" ? "小红书" : "未识别";
+  const platform = ({
+    douyin: "抖音",
+    xiaohongshu: "小红书",
+    bilibili: "B站",
+    "wechat-channels": "视频号",
+    youtube: "YouTube",
+    instagram: "Instagram",
+  })[identity.platformKey] || "未识别";
   return {
     id,
     generation: 1,
@@ -640,8 +711,15 @@ function serverInspiration({ id, originalUrl, category, identity }) {
     platformItemId: identity.platformItemId,
     platform,
     author: "",
+    authorId: "",
+    authorUrl: "",
     title: `待整理：${platform} 链接`,
     body: "",
+    transcript: "",
+    transcriptSource: "",
+    transcriptState: "",
+    transcriptStatus: "",
+    transcriptError: "",
     category: String(category || "").trim(),
     categoryAssignedByUser: Boolean(String(category || "").trim()),
     capturedAt: now,
@@ -670,6 +748,9 @@ function serverInspiration({ id, originalUrl, category, identity }) {
       platform,
       originalUrl,
       canonicalSourceKey: identity.canonicalSourceKey,
+      platformItemId: identity.platformItemId,
+      accountId: "",
+      accountUrl: "",
       accountName: "",
       publishedAt: "",
     },
@@ -685,8 +766,8 @@ async function ingestInspiration(payload, requestSessionId, libraryManager) {
   const originalUrl = firstUrl(payload?.rawText || payload?.url);
   if (!/^https?:\/\//i.test(originalUrl)) throw apiError("没有识别到有效内容链接", 400);
   const initialIdentity = canonicalSourceIdentity({ originalUrl });
-  if (!["douyin", "xiaohongshu"].includes(initialIdentity.platformKey)) {
-    throw apiError("目前只支持抖音和小红书真实链接", 400);
+  if (!["douyin", "xiaohongshu", "bilibili", "wechat-channels", "youtube", "instagram"].includes(initialIdentity.platformKey)) {
+    throw apiError("目前支持抖音、小红书、B站、视频号、YouTube 和 Instagram 链接", 400);
   }
 
   const initialLibrary = await libraryManager.readLibrary();
@@ -722,7 +803,17 @@ async function ingestInspiration(payload, requestSessionId, libraryManager) {
       Math.max(value, Number(String(id || "").match(/^I(\d+)$/)?.[1]) || 0)
     ), Number(current.contentIdCounters?.I) || 0);
     const id = `I${String(maximum + 1).padStart(6, "0")}`;
-    const item = serverInspiration({ id, originalUrl, category: payload?.category, identity });
+    const item = {
+      ...serverInspiration({ id, originalUrl, category: payload?.category, identity }),
+      intake: payload?.intake && typeof payload.intake === "object"
+        ? {
+            channel: String(payload.intake.channel || "desktop"),
+            submittedAt: payload.intake.submittedAt || new Date().toISOString(),
+            batchId: String(payload.intake.batchId || ""),
+            profileUrl: String(payload.intake.profileUrl || ""),
+          }
+        : { channel: "desktop", submittedAt: new Date().toISOString(), batchId: "", profileUrl: "" },
+    };
     return {
       payload: {
         ...current,
@@ -755,7 +846,6 @@ async function patchInspiration(payload, requestSessionId, libraryManager) {
     .filter(([key]) => INSPIRATION_PATCH_FIELDS.has(key)));
   if (!Object.keys(patch).length) throw apiError("没有可更新的灵感字段", 400);
   return libraryManager.mutateLibrary(async ({ current }) => {
-    if (current.inspirationTombstones?.[id]) throw apiError("这条灵感已删除，拒绝旧请求回写", 409);
     const item = (current.inspirations || []).find((candidate) => candidate?.id === id);
     if (!item) throw apiError("找不到要更新的灵感", 404);
     const generation = Number(item.generation) || 1;
@@ -813,6 +903,8 @@ function mergeExtractionIntoInspiration(currentItem, extraction) {
   const currentBody = String(currentItem.body || "").trim();
   const metricsSnapshot = {
     capturedAt: new Date().toISOString(),
+    ...(currentItem.stats || {}),
+    ...(extraction.stats || {}),
     likes: extraction.stats?.likes || currentItem.stats?.likes || "",
     favorites: extraction.stats?.favorites || currentItem.stats?.favorites || "",
     comments: extraction.stats?.comments || currentItem.stats?.comments || "",
@@ -820,6 +912,8 @@ function mergeExtractionIntoInspiration(currentItem, extraction) {
     views: extraction.stats?.views || currentItem.stats?.views || "",
   };
   const nextStats = {
+    ...(currentItem.stats || {}),
+    ...(extraction.stats || {}),
     likes: metricsSnapshot.likes,
     favorites: metricsSnapshot.favorites,
     comments: metricsSnapshot.comments,
@@ -843,11 +937,18 @@ function mergeExtractionIntoInspiration(currentItem, extraction) {
     canonicalSourceKey: sourceIdentity.canonicalSourceKey,
     title: extraction.title && isPlaceholderTitle ? extraction.title : currentItem.title,
     body: currentBody || extractedBody,
+    transcript: extraction.transcript || currentItem.transcript || "",
+    transcriptSource: extraction.transcriptSource || currentItem.transcriptSource || "",
+    transcriptState: extraction.transcriptState || currentItem.transcriptState || "",
+    transcriptStatus: extraction.transcriptStatus || currentItem.transcriptStatus || "",
+    transcriptError: extraction.transcriptError || "",
     author: extraction.author && !currentItem.author ? extraction.author : currentItem.author,
+    authorId: extraction.authorId || currentItem.authorId || "",
+    authorUrl: extraction.authorUrl || currentItem.authorUrl || "",
     contentType: extraction.contentType || currentItem.contentType || (extractedImages.length ? "image_set" : ""),
     images: extractedImages.length ? extractedImages : (currentItem.images || []),
-    mediaAssets: extractedImages.length
-      ? mergeImageAssets(currentItem, extractedImages)
+    mediaAssets: extractedImages.length || extraction.videoLocalPath || currentItem.videoLocalPath
+      ? mergeImageAssets(currentItem, extractedImages.length ? extractedImages : (currentItem.images || []), extraction.videoLocalPath || currentItem.videoLocalPath)
       : (currentItem.mediaAssets || []),
     coverUrl: extraction.coverUrl || currentItem.coverUrl || "",
     coverLocalPath: extraction.coverLocalPath || extractedImages[0]?.localPath || currentItem.coverLocalPath || "",
@@ -879,6 +980,9 @@ function mergeExtractionIntoInspiration(currentItem, extraction) {
       platform: extraction.platform || currentItem.platform || "",
       originalUrl: currentItem.originalUrl || currentItem.source?.originalUrl || "",
       canonicalSourceKey: sourceIdentity.canonicalSourceKey,
+      platformItemId: extraction.platformItemId || currentItem.platformItemId || "",
+      accountId: extraction.authorId || currentItem.authorId || "",
+      accountUrl: extraction.authorUrl || currentItem.authorUrl || "",
       accountName: extraction.author || currentItem.author || "",
       publishedAt: extraction.publishedAt || currentItem.publishedAt || "",
     },
@@ -899,7 +1003,6 @@ async function commitInspirationExtraction({ libraryManager, sessionId, contentI
   }
   return libraryManager.mutateLibrary(async ({ current }) => {
     if (isExtractionDiscarded(sessionId, id)) return { payload: current, result: { discarded: true } };
-    if (current.inspirationTombstones?.[id]) return { payload: current, result: { discarded: true } };
     const currentItem = (current.inspirations || []).find((item) => item?.id === id);
     if (!currentItem) return { payload: current, result: { discarded: true } };
     if (generation !== undefined && Number(generation) !== (Number(currentItem.generation) || 1)) {
@@ -939,7 +1042,7 @@ async function commitInspirationExtraction({ libraryManager, sessionId, contentI
 async function commitInspirationRefreshResult({ libraryManager, sessionId, contentId, generation, extraction }) {
   const id = validateContentId(contentId);
   return libraryManager.mutateLibrary(async ({ current }) => {
-    if (isExtractionDiscarded(sessionId, id) || current.inspirationTombstones?.[id]) {
+    if (isExtractionDiscarded(sessionId, id)) {
       return { payload: current, result: { discarded: true } };
     }
     const currentItem = (current.inspirations || []).find((item) => item?.id === id);
@@ -1792,27 +1895,10 @@ async function extractGenericPublic(payload, platform, libraryManager, authManag
     attempt: payload.attempt,
     retryAfterMs: transientFailure?.retryAfterMs,
   });
+  // The caller commits after `addTranscription()`.  Committing here first would
+  // make the direct-card route skip the later transcript write, leaving a saved
+  // Xiaohongshu video with no visible transcript state.
   const response = { ...result, ...quality, capturePhase, parseEvidence: sanitizeEvidence(evidence) };
-  if (!payload.repairMissingOnly && payload.id) {
-    const hasLocalAssets = result.images.some((image) => image?.localPath || image?.relativePath)
-      || Boolean(result.coverLocalPath || result.videoLocalPath);
-    if (hasLocalAssets || ["success", "partial"].includes(quality.parseState)) {
-      const committed = await commitInspirationExtraction({
-        libraryManager,
-        sessionId: payload.sessionId,
-        contentId: payload.id,
-        generation: payload.generation,
-        extraction: response,
-      });
-      response.discarded = Boolean(committed?.discarded);
-      response.library = committed?.library;
-      if (committed?.item) {
-        response.images = committed.item.images;
-        response.mediaAssets = committed.item.mediaAssets;
-        response.coverLocalPath = committed.item.coverLocalPath;
-      }
-    }
-  }
   if (payload.repairMissingOnly && !result.images.every((image) => image.localPath)) {
     await Promise.all(repairCreatedFiles.map((filePath) => fs.rm(filePath, { force: true }).catch(() => {})));
     throw apiError("仍有图片未保存到本地，本次修复已回滚", 409);
@@ -1888,6 +1974,108 @@ async function extractGenericPublic(payload, platform, libraryManager, authManag
   return response;
 }
 
+function mergePlatformResults(base = {}, next = {}) {
+  return {
+    ...base,
+    ...Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined && value !== null && value !== "")),
+    stats: {
+      ...(base.stats || {}),
+      ...Object.fromEntries(Object.entries(next.stats || {}).filter(([, value]) => value !== undefined && value !== null && value !== "")),
+    },
+    parseEvidence: [...(base.parseEvidence || []), ...(next.parseEvidence || [])],
+  };
+}
+
+async function extractAdditionalPlatform(payload, key, libraryManager, authManager) {
+  const evidence = [];
+  let publicResult = null;
+  try {
+    if (key === "bilibili") publicResult = await bilibiliPublicMetadata(payload.url);
+    if (key === "youtube") publicResult = await youtubePublicMetadata(payload.url);
+  } catch (error) {
+    evidence.push(`公开信息通道异常: ${error.message}`);
+  }
+
+  const hasProfile = await authManager.hasProfile(key);
+  const capture = await authManager.capturePage(payload.url, key);
+  let result = publicResult || {
+    platform: key === "bilibili" ? "B站" : key === "wechat-channels" ? "视频号" : key === "youtube" ? "YouTube" : "Instagram",
+    originalUrl: payload.url,
+    resolvedUrl: payload.url,
+    platformItemId: genericPlatformItemId(key, payload.url),
+    stats: { likes: "", favorites: "", comments: "", shares: "", views: "" },
+    contentType: "video",
+    parseEvidence: [],
+  };
+  if (capture?.html) {
+    result = mergePlatformResults(result, parseGenericPlatformCapture({
+      platform: key,
+      originalUrl: payload.url,
+      finalUrl: capture.finalUrl,
+      html: capture.html,
+      bodyText: capture.bodyText,
+      resources: capture.resources,
+      responseJsonCandidates: capture.responseJsonCandidates,
+      videoDuration: capture.videoDuration,
+      mediaSnapshot: capture.mediaSnapshot,
+    }));
+  }
+  result.platformItemId ||= genericPlatformItemId(key, result.resolvedUrl || payload.url);
+  result.targetMatched = Boolean(result.platformItemId);
+  result.originalUrl = payload.url;
+  result.parseEvidence = sanitizeEvidence([
+    ...(result.parseEvidence || []),
+    ...evidence,
+    `专用浏览器: ${capture?.authState || "未启用"}`,
+  ]);
+
+  const sessionHeaders = capture?.html
+    ? await authManager.authenticatedHeaders(key, result.videoUrl || result.coverUrl, result.resolvedUrl || payload.url).catch(() => ({}))
+    : {};
+  if (key === "youtube" && capture?.html && !result.transcript) {
+    const captionUrl = youtubeCaptionTrackUrl(captureJsonCandidates(capture.html, capture.responseJsonCandidates));
+    if (captionUrl) {
+      result.transcript = await fetchYoutubeCaption(captionUrl, sessionHeaders).catch(() => "");
+      if (result.transcript) result.transcriptSource = "platform_caption";
+    }
+  }
+  if (result.coverUrl && payload.id) {
+    Object.assign(result, await downloadCover(
+      result.coverUrl,
+      payload.id,
+      result.parseEvidence,
+      libraryManager,
+      result.resolvedUrl || payload.url,
+      sessionHeaders,
+    ));
+  }
+  if (result.videoUrl && payload.id) {
+    Object.assign(result, await downloadVideo(
+      result.videoUrl,
+      payload.id,
+      result.parseEvidence,
+      libraryManager,
+      result.resolvedUrl || payload.url,
+      sessionHeaders,
+    ));
+  }
+
+  const quality = evaluateExtractionQuality(result, {
+    authState: capture?.authState || (result.videoLocalPath ? "authenticated" : "unknown"),
+    hasProfile,
+    targetMatched: result.targetMatched,
+    captureFailure: capture?.errorCode === "AUTH_CAPTURE_FAILED" ? capture : null,
+    attempt: payload.attempt,
+  });
+  return {
+    ...result,
+    ...quality,
+    captureState: quality.parseState,
+    capturePhase: capture?.html ? "session_capture" : "public_quick_path",
+    parseEvidence: sanitizeEvidence(result.parseEvidence),
+  };
+}
+
 async function extractContent(payload, libraryManager, authManager) {
   const url = firstUrl(payload.url);
   if (!url) return { error: "没有可解析的链接" };
@@ -1902,6 +2090,10 @@ async function extractContent(payload, libraryManager, authManager) {
   }
   if (/douyin\.com|iesdouyin\.com/.test(url)) return extractDouyin({ ...payload, url }, libraryManager, authManager);
   if (/xiaohongshu\.com|xhslink\.(?:com|cn)/.test(url)) return extractGenericPublic({ ...payload, url }, "小红书", libraryManager, authManager);
+  const additionalPlatform = platformKey(url);
+  if (["bilibili", "wechat-channels", "youtube", "instagram"].includes(additionalPlatform)) {
+    return extractAdditionalPlatform({ ...payload, url }, additionalPlatform, libraryManager, authManager);
+  }
   return {
     platform: "未识别",
     originalUrl: url,
@@ -1909,6 +2101,373 @@ async function extractContent(payload, libraryManager, authManager) {
     parseStatus: "暂未接入这个平台解析器",
     parseEvidence: ["非抖音/小红书链接，暂未接入解析器"],
   };
+}
+
+async function addTranscription(result, payload, libraryManager) {
+  if (!payload.transcribe || result.contentType !== "video") return result;
+  if (result.transcript) {
+    return { ...result, transcriptSource: result.transcriptSource || "platform_caption", transcriptState: "complete" };
+  }
+  const relativePath = String(result.videoLocalPath || "").replace(/^\/library-assets\//, "").replace(/^\/+/, "");
+  if (!relativePath) return { ...result, transcriptState: "waiting_media", transcriptStatus: "等待本地视频后生成逐字稿" };
+  try {
+    const storage = libraryManager.requireActive(payload.sessionId || "");
+    const resolved = await resolveExistingLibraryTarget(storage, relativePath);
+    if (resolved.state !== "available") throw new Error(resolved.state === "offline" ? "资料库当前离线" : "本地视频不可用");
+    const transcript = await transcriptionService.transcribe(resolved.targetPath, {
+      platformTranscript: result.transcript || "",
+      duration: result.duration,
+    });
+    return { ...result, ...transcript, transcriptState: "complete", transcriptStatus: "逐字稿已生成" };
+  } catch (error) {
+    return {
+      ...result,
+      transcriptState: "retry_wait",
+      transcriptStatus: "逐字稿稍后自动补转",
+      transcriptError: sanitizeEvidence([error.message])[0] || "转写失败",
+    };
+  }
+}
+
+async function transcribeInspiration(payload, sessionId, libraryManager) {
+  const id = validateContentId(payload.id);
+  if (!id.startsWith("I")) throw apiError("只能为灵感内容生成逐字稿", 400);
+  libraryManager.requireActive(sessionId || "");
+  const library = await libraryManager.readLibrary();
+  const currentItem = (library.inspirations || []).find((item) => item?.id === id);
+  if (!currentItem) throw apiError("找不到这条灵感", 404);
+  if (payload.generation && Number(payload.generation) !== Number(currentItem.generation || 1)) {
+    throw apiError("灵感内容已更新，请刷新后重试", 409);
+  }
+  const result = await addTranscription(currentItem, { transcribe: true, sessionId }, libraryManager);
+  const nextItem = {
+    ...currentItem,
+    transcript: result.transcript || currentItem.transcript || "",
+    transcriptSource: result.transcriptSource || currentItem.transcriptSource || "",
+    transcriptState: result.transcriptState || "retry_wait",
+    transcriptStatus: result.transcriptStatus || "逐字稿暂未生成",
+    transcriptError: result.transcriptError || "",
+    updatedAt: new Date().toISOString(),
+  };
+  const committed = await libraryManager.mutateLibrary(async ({ current }) => {
+    const latest = (current.inspirations || []).find((item) => item?.id === id);
+    if (!latest || Number(latest.generation || 1) !== Number(currentItem.generation || 1)) {
+      throw apiError("灵感内容已变化，本次逐字稿未写入", 409);
+    }
+    return {
+      payload: {
+        ...current,
+        inspirations: (current.inspirations || []).map((item) => item?.id === id ? nextItem : item),
+      },
+      syncItems: [nextItem],
+      result: { item: nextItem },
+    };
+  }, sessionId || "");
+  return { item: committed.item, library: committed.library };
+}
+
+function publicProfileJob(job = {}) {
+  return {
+    id: job.id,
+    platform: job.platform,
+    profileUrl: job.profileUrl,
+    state: job.state,
+    foundCount: Number(job.foundCount) || 0,
+    processedCount: Number(job.processedCount) || 0,
+    successCount: Number(job.successCount) || 0,
+    failedCount: Number(job.failedCount) || 0,
+    existingCount: Number(job.existingCount) || 0,
+    currentUrl: job.currentUrl || "",
+    currentContentId: job.currentContentId || "",
+    currentGeneration: Number(job.currentGeneration) || 0,
+    currentStage: job.currentStage || "",
+    currentProgress: Math.max(0, Math.min(100, Number(job.currentProgress) || 0)),
+    message: job.message || "",
+    needsUserAction: Boolean(job.needsUserAction),
+    errorCode: job.errorCode || "",
+    endedBy: job.endedBy || "",
+    autoCollect: job.autoCollect !== false,
+    transcribe: Boolean(job.transcribe),
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    completedAt: job.completedAt || "",
+    nextRetryAt: job.nextRetryAt || "",
+  };
+}
+
+function durableProfileJob(job = {}) {
+  return {
+    ...publicProfileJob(job),
+    category: String(job.category || ""),
+    candidateUrls: Array.isArray(job.candidateUrls) ? job.candidateUrls.filter(Boolean) : [],
+    nextIndex: Math.max(0, Number(job.nextIndex) || 0),
+    maxItems: Math.max(1, Number(job.maxItems) || 5000),
+    maxRounds: Math.max(5, Number(job.maxRounds) || 120),
+  };
+}
+
+async function persistProfileJob(libraryManager, sessionId, job) {
+  const snapshot = durableProfileJob(job);
+  return libraryManager.mutateLibrary(async ({ current }) => ({
+    payload: {
+      ...current,
+      captureBatches: [
+        snapshot,
+        ...(current.captureBatches || []).filter((item) => item?.id !== snapshot.id),
+      ].slice(0, 100),
+    },
+    result: { batch: publicProfileJob(snapshot) },
+  }), sessionId || "");
+}
+
+async function commitExtractedInspiration({ libraryManager, sessionId, item, extraction }) {
+  if (!item?.id || extraction?.discarded) return extraction;
+  const committed = ["success", "partial"].includes(extraction.parseState)
+    ? await commitInspirationExtraction({
+        libraryManager,
+        sessionId,
+        contentId: item.id,
+        generation: item.generation,
+        extraction,
+      })
+    : await commitInspirationRefreshResult({
+        libraryManager,
+        sessionId,
+        contentId: item.id,
+        generation: item.generation,
+        extraction,
+      });
+  return { ...extraction, discarded: Boolean(committed?.discarded), library: committed?.library };
+}
+
+async function runProfileScanJob(job, sessionId, libraryManager, authManager) {
+  if (job.task) return publicProfileJob(job);
+  const task = (async () => {
+    try {
+      if (!job.candidateUrls?.length) {
+        job.state = "scanning";
+        job.message = "正在扫描主页作品";
+        job.needsUserAction = false;
+        job.errorCode = "";
+        job.updatedAt = new Date().toISOString();
+        await persistProfileJob(libraryManager, sessionId, job);
+        const scan = await authManager.scanProfile(job.profileUrl, job.platform, {
+          maxItems: job.maxItems,
+          maxRounds: job.maxRounds,
+          onProgress: ({ foundCount }) => {
+            job.foundCount = foundCount;
+            job.updatedAt = new Date().toISOString();
+          },
+        });
+        job.foundCount = scan.candidates?.length || 0;
+        job.endedBy = scan.endedBy || "";
+        if (scan.needsUserAction || scan.authState !== "authenticated") {
+          job.state = scan.authState === "challenge" ? "waiting_verification" : "waiting_login";
+          job.needsUserAction = true;
+          job.errorCode = scan.errorCode || "AUTH_LOGIN_REQUIRED";
+          job.message = scan.authState === "challenge" ? "请在专用窗口完成验证后继续" : "请先完成平台登录";
+          job.updatedAt = new Date().toISOString();
+          await persistProfileJob(libraryManager, sessionId, job);
+          return;
+        }
+        job.candidateUrls = (scan.candidates || []).map((candidate) => candidate.url).filter(Boolean);
+        job.foundCount = job.candidateUrls.length;
+        job.nextIndex = 0;
+        job.message = scan.mode === "single_work"
+          ? "已识别单条作品，正在采集"
+          : `已发现 ${job.foundCount} 条主页作品`;
+        await persistProfileJob(libraryManager, sessionId, job);
+      }
+      if (!job.autoCollect) {
+        job.state = "ready";
+        job.message = `已发现 ${job.foundCount} 条作品`;
+        job.updatedAt = new Date().toISOString();
+        await persistProfileJob(libraryManager, sessionId, job);
+        return;
+      }
+      job.state = "collecting";
+      job.needsUserAction = false;
+      job.errorCode = "";
+      job.message = `正在采集 ${job.nextIndex + 1}/${job.foundCount}`;
+      job.updatedAt = new Date().toISOString();
+      await persistProfileJob(libraryManager, sessionId, job);
+      for (let index = job.nextIndex; index < job.candidateUrls.length; index += 1) {
+        const candidateUrl = job.candidateUrls[index];
+        job.currentUrl = candidateUrl;
+        job.message = `正在采集 ${index + 1}/${job.foundCount}`;
+        const ingested = await ingestInspiration({
+          rawText: candidateUrl,
+          category: job.category,
+          intake: { channel: "profile_batch", batchId: job.id, profileUrl: job.profileUrl },
+        }, sessionId, libraryManager);
+        if (ingested.existing) job.existingCount += 1;
+        const item = ingested.item;
+        job.currentContentId = item.id;
+        job.currentGeneration = Number(item.generation) || 1;
+        job.currentStage = ingested.existing ? "正在刷新已有卡片" : "卡片已创建，正在读取作品";
+        job.currentProgress = 18;
+        job.updatedAt = new Date().toISOString();
+        await persistProfileJob(libraryManager, sessionId, job);
+        const extraction = await extractionScheduler.run({
+          platform: job.platform,
+          sessionId,
+          contentId: item.id,
+          generation: item.generation,
+        }, async () => {
+          const extracted = await extractContent({
+            id: item.id,
+            url: item.originalUrl,
+            generation: item.generation,
+            attempt: 1,
+            sessionId,
+            transcribe: job.transcribe,
+          }, libraryManager, authManager);
+          job.currentStage = job.transcribe && extracted.contentType === "video" && extracted.videoLocalPath
+            ? "本地素材已保存，正在生成逐字稿"
+            : "正在整理采集结果";
+          job.currentProgress = job.transcribe && extracted.contentType === "video" ? 86 : 92;
+          job.updatedAt = new Date().toISOString();
+          await persistProfileJob(libraryManager, sessionId, job);
+          return addTranscription(extracted, { transcribe: job.transcribe, sessionId }, libraryManager);
+        });
+        const committed = await commitExtractedInspiration({ libraryManager, sessionId, item, extraction });
+        if (["waiting_login", "waiting_verification"].includes(committed.parseState)) {
+          job.state = committed.parseState;
+          job.needsUserAction = true;
+          job.errorCode = committed.errorCode || (committed.parseState === "waiting_verification" ? "AUTH_CHALLENGE" : "AUTH_LOGIN_REQUIRED");
+          job.currentStage = committed.parseState === "waiting_verification" ? "等待人工验证" : "等待平台登录";
+          job.currentProgress = 24;
+          job.message = committed.parseState === "waiting_verification"
+            ? "请在专用窗口完成验证后继续"
+            : "登录已失效，完成登录后继续同一任务";
+          job.updatedAt = new Date().toISOString();
+          await persistProfileJob(libraryManager, sessionId, job);
+          return;
+        }
+        if (committed.parseState === "retry_wait") {
+          job.state = "retry_wait";
+          job.nextRetryAt = committed.nextRetryAt || new Date(Date.now() + Math.max(3000, Number(committed.retryAfterMs) || 15000)).toISOString();
+          job.errorCode = committed.errorCode || "NETWORK_TRANSIENT";
+          job.currentStage = "等待平台通道自动恢复";
+          job.currentProgress = Math.max(18, job.currentProgress || 0);
+          job.message = "平台通道正在冷却，将从当前作品继续";
+          job.updatedAt = new Date().toISOString();
+          await persistProfileJob(libraryManager, sessionId, job);
+          return;
+        }
+        job.processedCount += 1;
+        if (["success", "partial"].includes(committed.parseState)) job.successCount += 1;
+        else job.failedCount += 1;
+        job.currentStage = committed.parseState === "success"
+          ? "采集完成"
+          : committed.parseState === "partial"
+            ? "已保存可用内容，部分信息缺失"
+            : "本条采集未完成";
+        job.currentProgress = ["success", "partial"].includes(committed.parseState) ? 100 : 0;
+        job.nextIndex = index + 1;
+        job.nextRetryAt = "";
+        job.updatedAt = new Date().toISOString();
+        await persistProfileJob(libraryManager, sessionId, job);
+      }
+      job.state = "complete";
+      job.currentUrl = "";
+      job.completedAt = new Date().toISOString();
+      job.updatedAt = job.completedAt;
+      job.message = `扫描 ${job.foundCount} 条，完成 ${job.processedCount} 条`;
+      await persistProfileJob(libraryManager, sessionId, job);
+    } catch (error) {
+      job.state = "failed";
+      job.errorCode = error.code || "PROFILE_SCAN_FAILED";
+      job.message = sanitizeEvidence([error.message])[0] || "主页扫描失败";
+      job.updatedAt = new Date().toISOString();
+      await persistProfileJob(libraryManager, sessionId, job).catch(() => {});
+    }
+  })();
+  job.task = task;
+  task.finally(() => {
+    if (job.task === task) job.task = null;
+  });
+  return publicProfileJob(job);
+}
+
+async function startProfileScan(payload, sessionId, libraryManager, authManager) {
+  const profileUrl = firstUrl(payload.profileUrl || payload.url);
+  const platform = platformKey(profileUrl);
+  if (!profileUrl || !platform) throw apiError("没有识别到受支持的平台主页链接", 400);
+  const library = await libraryManager.readLibrary();
+  const resumable = (library.captureBatches || []).find((item) => (
+    item?.profileUrl === profileUrl
+    && !["complete", "ready"].includes(item?.state)
+  ));
+  if (resumable) return resumeProfileScan({ id: resumable.id }, sessionId, libraryManager, authManager);
+  const id = `B${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const now = new Date().toISOString();
+  const job = {
+    id,
+    platform,
+    profileUrl,
+    state: "queued",
+    foundCount: 0,
+    processedCount: 0,
+    successCount: 0,
+    failedCount: 0,
+    existingCount: 0,
+    currentUrl: "",
+    currentContentId: "",
+    currentGeneration: 0,
+    currentStage: "",
+    currentProgress: 0,
+    message: "等待主页扫描",
+    needsUserAction: false,
+    errorCode: "",
+    endedBy: "",
+    autoCollect: payload.autoCollect !== false,
+    transcribe: Boolean(payload.transcribe),
+    category: String(payload.category || ""),
+    candidateUrls: [],
+    nextIndex: 0,
+    maxItems: Math.max(1, Number(payload.maxItems) || 5000),
+    maxRounds: Math.max(5, Number(payload.maxRounds) || 120),
+    createdAt: now,
+    updatedAt: now,
+    completedAt: "",
+    nextRetryAt: "",
+  };
+  profileScanJobs.set(id, job);
+  await persistProfileJob(libraryManager, sessionId, job);
+  return runProfileScanJob(job, sessionId, libraryManager, authManager);
+}
+
+async function resumeProfileScan(payload, sessionId, libraryManager, authManager) {
+  const id = String(payload.id || payload.resumeId || "").trim();
+  if (!id) throw apiError("缺少主页扫描任务编号", 400);
+  let job = profileScanJobs.get(id);
+  if (!job) {
+    const library = await libraryManager.readLibrary();
+    const stored = (library.captureBatches || []).find((item) => item?.id === id);
+    if (!stored) throw apiError("找不到这个主页扫描任务", 404);
+    job = { ...durableProfileJob(stored), task: null };
+    profileScanJobs.set(id, job);
+  }
+  if (["complete", "ready"].includes(job.state)) return publicProfileJob(job);
+  job.state = job.candidateUrls?.length ? "collecting" : "queued";
+  job.needsUserAction = false;
+  job.errorCode = "";
+  job.nextRetryAt = "";
+  job.message = job.candidateUrls?.length ? `从第 ${job.nextIndex + 1} 条继续` : "重新核对登录并继续扫描";
+  job.updatedAt = new Date().toISOString();
+  await persistProfileJob(libraryManager, sessionId, job);
+  return runProfileScanJob(job, sessionId, libraryManager, authManager);
+}
+
+async function profileScanStatus(id, libraryManager) {
+  if (id && profileScanJobs.has(id)) return publicProfileJob(profileScanJobs.get(id));
+  const library = await libraryManager.readLibrary();
+  if (id) {
+    const stored = (library.captureBatches || []).find((item) => item?.id === id);
+    return stored ? publicProfileJob(stored) : null;
+  }
+  return (library.captureBatches || []).slice(0, 20).map(publicProfileJob);
 }
 
 function readJsonBody(req) {
@@ -2521,183 +3080,76 @@ function scheduleDeleteCleanup({ libraryDir, contentId, stagingPath, attempt = 1
 async function resumePendingDeleteCleanup(libraryManager) {
   const storage = libraryManager.storage();
   if (!storage?.libraryDir) return [];
-  const libraryRoot = await resolveLibraryRoot(storage);
-  const contentUnitsPath = path.join(libraryRoot, "content-units");
-  const entries = await fs.readdir(contentUnitsPath, { withFileTypes: true }).catch((error) => {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  });
-  const resumed = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
-    const match = entry.name.match(/^\.deleting-(I\d{6,})-\d+-\d+$/);
-    if (!match) continue;
-    const stagingPath = path.join(contentUnitsPath, entry.name);
-    if (!isPathInside(contentUnitsPath, stagingPath)) continue;
-    resumed.push(scheduleDeleteCleanup({
-      libraryDir: storage.libraryDir,
-      contentId: match[1],
-      stagingPath,
-    }));
-  }
-  return resumed;
+  return purgeLegacyDeleteStaging(storage.libraryDir);
 }
 
-export async function deleteInspirationContentUnit(payload, requestSessionId, expectedRevision, libraryManager) {
+export async function deleteContentUnitPermanently(payload, requestSessionId, expectedRevision, libraryManager) {
   if (!libraryManager && expectedRevision?.mutateLibrary) {
     libraryManager = expectedRevision;
     expectedRevision = "";
   }
   const contentId = validateContentId(payload?.id);
-  if (!/^I\d{6,}$/.test(contentId)) throw apiError("只能删除灵感内容 ID", 400);
+  if (!/^[IC]\d{6,}$/.test(contentId)) throw apiError("只能删除标准内容 ID", 400);
+  const isInspiration = contentId.startsWith("I");
   const storage = libraryManager.requireActive(requestSessionId || "");
   const discardKey = extractionDiscardKey(storage.sessionId, contentId);
-  discardedExtractionIds.add(discardKey);
+  if (isInspiration) discardedExtractionIds.add(discardKey);
   try {
     return await libraryManager.mutateLibrary(async ({ current }) => {
-    const started = Date.now();
-    const timings = {};
-    const libraryRoot = await resolveLibraryRoot(storage);
-    const contentUnitsPath = path.join(libraryRoot, "content-units");
-    const contentUnitsStat = await fs.lstat(contentUnitsPath).catch((error) => {
-      if (error.code === "ENOENT") return null;
-      throw error;
-    });
-    if (!contentUnitsStat) throw apiError("当前资料库缺少 content-units 目录", 409);
-    if (contentUnitsStat.isSymbolicLink() || !contentUnitsStat.isDirectory()) throw apiError("内容单元根目录无效", 403);
-    const realContentUnits = await fs.realpath(contentUnitsPath);
-    if (!isPathInside(libraryRoot, realContentUnits)) throw apiError("内容单元根目录不在当前资料库内", 403);
-
-    const targetPath = path.join(realContentUnits, contentId);
-    if (!isPathInside(realContentUnits, targetPath)) throw apiError("待删除内容单元路径无效", 403);
-    let targetStat;
-    try {
-      targetStat = await fs.lstat(targetPath);
-    } catch (error) {
-      if (error.code !== "ENOENT") {
-        const state = inaccessibleState(error);
-        throw apiError(state === "offline" ? "当前资料库或所在卷不可访问" : "无法检查内容单元", state === "offline" ? 503 : 409);
-      }
-      targetStat = null;
-    }
-    if (targetStat?.isSymbolicLink()) throw apiError("拒绝删除符号链接内容单元", 403);
-    if (targetStat && !targetStat.isDirectory()) throw apiError("内容单元路径不是目录", 409);
-    if (targetStat) {
-      const realTarget = await fs.realpath(targetPath);
-      if (!isPathInside(realContentUnits, realTarget)) throw apiError("待删除内容单元不在当前资料库内", 403);
-    }
-
-    const projects = (current.projects || []).map((record) => removeInspirationReference(record, contentId));
-    const archive = (current.archive || []).map((record) => removeInspirationReference(record, contentId));
-    const activeProject = removeInspirationReference(current.activeProject, contentId);
-    const affectedRecords = [
-      ...(current.projects || []).map((record, index) => recordReferencesInspiration(record, contentId) ? projects[index] : null),
-      ...(current.archive || []).map((record, index) => recordReferencesInspiration(record, contentId) ? archive[index] : null),
-      recordReferencesInspiration(current.activeProject, contentId) ? activeProject : null,
-    ].filter(Boolean);
-    const nextPayload = {
-      ...current,
-      storage: undefined,
-      libraryOpen: undefined,
-      revision: undefined,
-      inspirations: (current.inspirations || []).filter((item) => item?.id !== contentId),
-      inspirationTombstones: {
-        ...(current.inspirationTombstones || {}),
-        [contentId]: {
-          generation: Number((current.inspirations || []).find((item) => item?.id === contentId)?.generation) || 1,
-          deletedAt: new Date().toISOString(),
+      const startedAt = Date.now();
+      const sourceExists = [
+        ...(current.inspirations || []),
+        ...(current.projects || []),
+        ...(current.archive || []),
+        current.activeProject,
+      ].some((item) => item?.id === contentId);
+      const affectedRecords = isInspiration ? [
+          ...(current.projects || []).filter((record) => recordReferencesInspiration(record, contentId)),
+          ...(current.archive || []).filter((record) => recordReferencesInspiration(record, contentId)),
+          ...(recordReferencesInspiration(current.activeProject, contentId) ? [current.activeProject] : []),
+        ] : [];
+      const staged = await stageContentUnitForDeletion(storage.libraryDir, contentId);
+      const { next, fingerprints } = stripContentFromLibrary(current, contentId);
+      return {
+        payload: next,
+        allowDestructiveShrink: true,
+        syncItems: affectedRecords.map((record) => removeInspirationReference(record, contentId)),
+        incrementEpoch: true,
+        backupLabel: "pre-hard-delete",
+        rollback: () => rollbackStagedContentUnit(staged),
+        afterCommit: async ({ library }) => {
+          const {
+            storage: _storage,
+            libraryOpen: _libraryOpen,
+            revision: _revision,
+            sessionId: _sessionId,
+            ...persistedLibrary
+          } = library;
+          await finishHardDelete({
+            libraryDir: storage.libraryDir,
+            staged,
+            fingerprints,
+            sanitizedLibrary: persistedLibrary,
+          });
         },
-      },
-      projects,
-      archive,
-      activeProject,
-    };
-    const stagingPath = path.join(realContentUnits, `.deleting-${contentId}-${process.pid}-${Date.now()}`);
-    let staged = false;
-    if (targetStat) {
-      const renameStarted = Date.now();
-      await fs.rename(targetPath, stagingPath);
-      staged = true;
-      timings.renameMs = Date.now() - renameStarted;
-    } else {
-      timings.renameMs = 0;
-    }
-    timings.prepareMs = Date.now() - started;
-
-    return {
-      payload: nextPayload,
-      syncItems: affectedRecords,
-      rollback: async () => {
-        if (!staged) return;
-        await fs.rename(stagingPath, targetPath);
-      },
-      afterCommit: ({ library }) => {
-        timings.commitMs = Date.now() - started;
-        const cleanup = staged
-          ? scheduleDeleteCleanup({
-              libraryDir: storage.libraryDir,
-              contentId,
-              stagingPath,
-            })
-          : {
-              contentId,
-              state: "not_needed",
-              attempt: 0,
-              stagedName: "",
-              startedAt: "",
-              updatedAt: new Date().toISOString(),
-              completedAt: new Date().toISOString(),
-              retryAt: "",
-              errorCode: "",
-              cleanupMs: 0,
-            };
-        console.info("[inspiration-delete]", JSON.stringify({
-          contentId,
-          indexed: true,
-          affectedRecords: affectedRecords.length,
-          renameMs: timings.renameMs,
-          commitMs: timings.commitMs,
-          cleanupState: cleanup.state,
-        }));
-        return library;
-      },
-      result: {
-        deleted: true,
-        contentId,
-        contentUnitState: targetStat ? "cleanup_pending" : "missing",
-        cleanup: staged
-          ? {
-              contentId,
-              state: "pending",
-              attempt: 1,
-              stagedName: path.basename(stagingPath),
-              startedAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              completedAt: "",
-              retryAt: "",
-              errorCode: "",
-              cleanupMs: 0,
-            }
-          : {
-              contentId,
-              state: "not_needed",
-              attempt: 0,
-              stagedName: "",
-              startedAt: "",
-              updatedAt: new Date().toISOString(),
-              completedAt: new Date().toISOString(),
-              retryAt: "",
-              errorCode: "",
-              cleanupMs: 0,
-            },
-        timings,
-      },
-    };
-    }, storage.sessionId);
+        result: {
+          deleted: true,
+          contentUnitState: "deleted",
+          existedInIndex: sourceExists,
+          elapsedMs: Date.now() - startedAt,
+        },
+      };
+    }, storage.sessionId, expectedRevision || "");
   } catch (error) {
-    if (error.statusCode === 503) discardedExtractionIds.delete(discardKey);
+    if (isInspiration && (error.statusCode === 503 || error.code === "LIBRARY_WRITE_LOCKED")) discardedExtractionIds.delete(discardKey);
     throw error;
   }
+}
+
+export async function deleteInspirationContentUnit(payload, requestSessionId, expectedRevision, libraryManager) {
+  const contentId = validateContentId(payload?.id);
+  if (!/^I\d{6,}$/.test(contentId)) throw apiError("只能删除灵感内容 ID", 400);
+  return deleteContentUnitPermanently({ ...payload, id: contentId }, requestSessionId, expectedRevision, libraryManager);
 }
 
 function installLibraryApi(server, libraryManager, options = {}) {
@@ -2732,9 +3184,26 @@ function installLibraryApi(server, libraryManager, options = {}) {
           }
           return;
         }
-        if (!req.url?.startsWith("/api/library") && !req.url?.startsWith("/api/content-ids") && !req.url?.startsWith("/api/extract") && !req.url?.startsWith("/api/covers") && !req.url?.startsWith("/api/project-media") && !req.url?.startsWith("/api/project-actions") && !req.url?.startsWith("/api/project-assets/status") && !req.url?.startsWith("/api/auth/") && !req.url?.startsWith("/api/inspirations/")) return next();
+        if (!req.url?.startsWith("/api/library") && !req.url?.startsWith("/api/content/") && !req.url?.startsWith("/api/content-ids") && !req.url?.startsWith("/api/extract") && !req.url?.startsWith("/api/profile-scans") && !req.url?.startsWith("/api/transcription/") && !req.url?.startsWith("/api/covers") && !req.url?.startsWith("/api/project-media") && !req.url?.startsWith("/api/project-actions") && !req.url?.startsWith("/api/project-assets/status") && !req.url?.startsWith("/api/auth/") && !req.url?.startsWith("/api/inspirations/")) return next();
         res.setHeader("content-type", "application/json; charset=utf-8");
         try {
+          if (req.url.startsWith("/api/content/")) {
+            if (req.method !== "DELETE") {
+              res.statusCode = 405;
+              res.end(JSON.stringify({ error: "Method not allowed" }));
+              return;
+            }
+            const requestUrl = new URL(req.url, "http://local");
+            const id = decodeURIComponent(requestUrl.pathname.slice("/api/content/".length));
+            const result = await deleteContentUnitPermanently(
+              { id },
+              req.headers["x-library-session-id"] || "",
+              req.headers["x-library-revision"] || "",
+              libraryManager,
+            );
+            res.end(JSON.stringify(result));
+            return;
+          }
           if (req.url.startsWith("/api/content-ids")) {
             if (req.method !== "POST") {
               res.statusCode = 405;
@@ -2776,6 +3245,7 @@ function installLibraryApi(server, libraryManager, options = {}) {
           }
           if (req.url.startsWith("/api/project-media")) {
             if (req.method === "DELETE") {
+              await libraryManager.requireWritable(req.headers["x-library-session-id"] || "");
               const payload = await readJsonBody(req);
               const result = await deleteProjectMediaContent(
                 payload,
@@ -2801,7 +3271,7 @@ function installLibraryApi(server, libraryManager, options = {}) {
               return;
             }
             const sessionId = req.headers["x-library-session-id"] || "";
-            const storage = libraryManager.requireActive(sessionId);
+            const storage = await libraryManager.requireWritable(sessionId);
             const media = await storeUploadedProjectMedia(
               req,
               projectId,
@@ -2830,7 +3300,7 @@ function installLibraryApi(server, libraryManager, options = {}) {
               return;
             }
             const bytes = await readBinaryBody(req);
-            const storage = libraryManager.requireActive(req.headers["x-library-session-id"] || "");
+            const storage = await libraryManager.requireWritable(req.headers["x-library-session-id"] || "");
             const cover = await storeUploadedCover(bytes, projectId, req.headers["x-file-name"], storage);
             res.statusCode = 201;
             res.end(JSON.stringify({ cover }));
@@ -2923,6 +3393,69 @@ function installLibraryApi(server, libraryManager, options = {}) {
             res.end(JSON.stringify(await authManager.status(key, { probe })));
             return;
           }
+          if (req.url.startsWith("/api/profile-scans")) {
+            const requestUrl = new URL(req.url, "http://local");
+            const sessionId = req.headers["x-library-session-id"] || "";
+            if (req.method === "POST") {
+              await libraryManager.requireWritable(sessionId);
+              const payload = await readJsonBody(req);
+              const batch = payload.resumeId || payload.id
+                ? await resumeProfileScan(payload, sessionId, libraryManager, authManager)
+                : await startProfileScan(payload, sessionId, libraryManager, authManager);
+              res.statusCode = 202;
+              res.end(JSON.stringify({ batch }));
+              return;
+            }
+            if (req.method === "GET") {
+              const batchId = requestUrl.searchParams.get("id") || "";
+              const batch = await profileScanStatus(batchId, libraryManager);
+              if (batchId && !batch) {
+                res.statusCode = 404;
+                res.end(JSON.stringify({ error: "找不到这个主页扫描任务" }));
+                return;
+              }
+              res.end(JSON.stringify(batchId ? { batch } : { batches: batch }));
+              return;
+            }
+            res.statusCode = 405;
+            res.end(JSON.stringify({ error: "Method not allowed" }));
+            return;
+          }
+          if (req.url.startsWith("/api/transcription/status")) {
+            if (req.method !== "GET") {
+              res.statusCode = 405;
+              res.end(JSON.stringify({ error: "Method not allowed" }));
+              return;
+            }
+            res.end(JSON.stringify(await transcriptionService.status()));
+            return;
+          }
+          if (req.url.startsWith("/api/transcription/configure")) {
+            if (req.method !== "POST") {
+              res.statusCode = 405;
+              res.end(JSON.stringify({ error: "Method not allowed" }));
+              return;
+            }
+            const payload = await readJsonBody(req);
+            res.end(JSON.stringify(await transcriptionService.configure(payload)));
+            return;
+          }
+          if (req.url.startsWith("/api/transcription/run")) {
+            if (req.method !== "POST") {
+              res.statusCode = 405;
+              res.end(JSON.stringify({ error: "Method not allowed" }));
+              return;
+            }
+            const payload = await readJsonBody(req);
+            await libraryManager.requireWritable(req.headers["x-library-session-id"] || "");
+            const result = await transcribeInspiration(
+              payload,
+              req.headers["x-library-session-id"] || "",
+              libraryManager,
+            );
+            res.end(JSON.stringify(result));
+            return;
+          }
           if (req.url.startsWith("/api/extract")) {
             if (req.method !== "POST") {
               res.statusCode = 405;
@@ -2932,8 +3465,10 @@ function installLibraryApi(server, libraryManager, options = {}) {
             const payload = await readJsonBody(req);
             const queueKey = platformKey(payload.platform) || platformKey(firstUrl(payload.url));
             payload.sessionId ||= req.headers["x-library-session-id"] || "";
+            await libraryManager.requireWritable(payload.sessionId);
             const executeExtraction = async () => {
-              const result = await extractContent(payload, libraryManager, authManager);
+              let result = await extractContent(payload, libraryManager, authManager);
+              result = await addTranscription(result, payload, libraryManager);
               if (payload.id && !payload.repairMissingOnly && !result.library && !result.discarded) {
                 const committed = ["success", "partial"].includes(result.parseState)
                   ? await commitInspirationExtraction({
@@ -3021,6 +3556,9 @@ export function libraryApiPlugin(options = {}) {
     getLibraryStorage() {
       return libraryManager.storage();
     },
+    async dispose() {
+      await libraryManager.dispose();
+    },
     configureServer(server) {
       installLibraryApi(server, libraryManager, apiOptions);
     },
@@ -3031,6 +3569,11 @@ export function libraryApiPlugin(options = {}) {
 }
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(currentBuild.version),
+    __APP_COMMIT__: JSON.stringify(currentBuild.commit),
+    __APP_DIRTY__: JSON.stringify(currentBuild.dirty),
+  },
   build: {
     outDir: "dist/client",
   },

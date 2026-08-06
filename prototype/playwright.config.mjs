@@ -23,6 +23,7 @@ export default defineConfig({
     env: {
       VIDEO_CONTENT_LIBRARY_ROOT: path.join(prototypeRoot, ".qa-library"),
       VIDEO_CONTENT_AUTH_ROOT: path.join(prototypeRoot, ".qa-auth-browser"),
+      VIDEO_STUDIO_QA_MODE: "1",
     },
     url: baseURL,
     reuseExistingServer: false,

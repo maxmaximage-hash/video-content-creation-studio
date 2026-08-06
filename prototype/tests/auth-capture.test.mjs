@@ -51,6 +51,7 @@ test("cookie with only newtab remains session_unverified during a non-navigating
   const manager = createAuthCaptureManager({
     authRoot,
     fetchImpl,
+    assumeDedicatedCdp: true,
     loadPlaywright: async () => ({ chromium: { connectOverCDP: async () => browser } }),
   });
 
@@ -167,6 +168,7 @@ function createCdpFixture({ initialTabs, connectImpl }) {
   return {
     calls,
     fetchImpl,
+    assumeDedicatedCdp: true,
     loadPlaywright: async () => ({ chromium }),
     spawnImpl: (_executable, args) => {
       calls.spawns += 1;
@@ -204,6 +206,50 @@ test("stale CDP with no pages relaunches once with the same canonical profile", 
   assert.equal(cdp.calls.spawns, 1);
   assert.equal(cdp.calls.connects, 1);
   assert.ok(cdp.calls.spawnArgs[0].includes(`--user-data-dir=${path.join(authRoot, "douyin")}`));
+});
+
+test("an unowned occupied default port starts an isolated fallback browser without terminating it", async (t) => {
+  const authRoot = await fs.mkdtemp(path.join(os.tmpdir(), "capture-unowned-port-auth-"));
+  t.after(() => fs.rm(authRoot, { recursive: true, force: true }));
+  await fs.mkdir(path.join(authRoot, "douyin"));
+  const browser = createBrowserFixture();
+  let launched = false;
+  let spawnArgs = [];
+  let killCalls = 0;
+  const manager = createAuthCaptureManager({
+    authRoot,
+    fetchImpl: async (url) => {
+      if (String(url).endsWith("/json/version")) return new Response(JSON.stringify({ Browser: "mock" }), { status: 200 });
+      if (String(url).endsWith("/json/list")) {
+        return new Response(JSON.stringify(launched ? [{ url: "https://www.douyin.com/" }] : []), { status: 200 });
+      }
+      throw new Error("unexpected request");
+    },
+    execFileImpl: async (command, args) => {
+      if (command === "lsof") return { stdout: String(args.join(" ")).includes("9331") ? "777\n" : "" };
+      if (command === "ps") return { stdout: "/Applications/Other.app/Contents/MacOS/Chrome --remote-debugging-port=9331 --user-data-dir=/tmp/other-profile" };
+      return { stdout: "" };
+    },
+    killImpl: () => { killCalls += 1; },
+    spawnImpl: (_executable, args) => {
+      launched = true;
+      spawnArgs = args;
+      return { pid: 9002, unref() {}, kill() {} };
+    },
+    loadPlaywright: async () => ({
+      chromium: {
+        executablePath: () => "/mock/chromium",
+        connectOverCDP: async () => browser.browser,
+      },
+    }),
+    sleep: async () => {},
+  });
+
+  const result = await manager.open({ platform: "douyin" });
+  assert.equal(result.authState, "authenticated");
+  assert.ok(spawnArgs.includes("--remote-debugging-port=9431"));
+  assert.ok(spawnArgs.includes(`--user-data-dir=${path.join(authRoot, "douyin")}`));
+  assert.equal(killCalls, 0);
 });
 
 test("recoverable CDP connection failure triggers one relaunch and reconnect", async (t) => {
@@ -285,6 +331,55 @@ test("Xiaohongshu discovery links normalize to explore for the logged browser", 
     "https://www.xiaohongshu.com/explore/6a0000000000000013000001?source=webshare&xsec_source=pc_share",
   );
   assert.equal(normalizePlatformCaptureUrl(source, "douyin"), source);
+});
+
+test("profile scan treats a redirected Douyin work page as one candidate", async (t) => {
+  const authRoot = await fs.mkdtemp(path.join(os.tmpdir(), "capture-direct-work-auth-"));
+  t.after(() => fs.rm(authRoot, { recursive: true, force: true }));
+  await fs.mkdir(path.join(authRoot, "douyin"));
+  const workUrl = "https://www.douyin.com/video/7617795110478627401";
+  let currentUrl = "https://www.douyin.com/";
+  const page = {
+    url: () => currentUrl,
+    title: async () => "朋友圈的发布频率非常重要",
+    locator: () => ({ innerText: async () => "推荐 关注 作品 点赞 评论 分享" }),
+    frames: () => [page],
+    mainFrame: () => page,
+    context: () => context,
+    goto: async () => {
+      currentUrl = workUrl;
+      return { status: () => 200 };
+    },
+    waitForTimeout: async () => {},
+    bringToFront: async () => {},
+    isClosed: () => false,
+  };
+  const context = {
+    pages: () => [page],
+    cookies: async () => [{ name: "sessionid", value: "memory-only" }],
+    newPage: async () => page,
+  };
+  const browser = { contexts: () => [context], newContext: async () => context };
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith("/json/version")) return new Response(JSON.stringify({ Browser: "mock" }), { status: 200 });
+    if (String(url).endsWith("/json/list")) return new Response(JSON.stringify([{ type: "page", url: currentUrl }]), { status: 200 });
+    throw new Error("unexpected request");
+  };
+  const manager = createAuthCaptureManager({
+    authRoot,
+    fetchImpl,
+    assumeDedicatedCdp: true,
+    loadPlaywright: async () => ({ chromium: { connectOverCDP: async () => browser } }),
+  });
+
+  const result = await manager.scanProfile("https://v.douyin.com/oH2hdMf3g_o/", "douyin");
+  assert.equal(result.mode, "single_work");
+  assert.equal(result.endedBy, "single_work");
+  assert.deepEqual(result.candidates, [{
+    url: workUrl,
+    title: "朋友圈的发布频率非常重要",
+    coverUrl: "",
+  }]);
 });
 
 test("authenticated headers never pass an invalid media URL to browserContext.cookies", async (t) => {
@@ -435,6 +530,7 @@ async function captureManagerFixture(t, { pages, context }) {
   return createAuthCaptureManager({
     authRoot,
     fetchImpl,
+    assumeDedicatedCdp: true,
     loadPlaywright: async () => ({ chromium: { connectOverCDP: async () => browser } }),
   });
 }

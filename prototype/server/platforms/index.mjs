@@ -1,9 +1,17 @@
 import { douyinAdapter } from "./douyin.mjs";
 import { xiaohongshuAdapter } from "./xiaohongshu.mjs";
+import { bilibiliAdapter } from "./bilibili.mjs";
+import { instagramAdapter } from "./instagram.mjs";
+import { wechatChannelsAdapter } from "./wechat-channels.mjs";
+import { youtubeAdapter } from "./youtube.mjs";
 
 export const PLATFORM_ADAPTERS = Object.freeze({
   douyin: douyinAdapter,
   xiaohongshu: xiaohongshuAdapter,
+  bilibili: bilibiliAdapter,
+  "wechat-channels": wechatChannelsAdapter,
+  youtube: youtubeAdapter,
+  instagram: instagramAdapter,
 });
 
 export function platformAdapter(key, adapters = PLATFORM_ADAPTERS) {

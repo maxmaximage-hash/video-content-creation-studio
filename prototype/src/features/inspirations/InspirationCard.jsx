@@ -5,6 +5,8 @@ import {
   ChevronRight,
   Copy,
   ExternalLink,
+  Eye,
+  FileText,
   Heart,
   ImageOff,
   ImagePlus,
@@ -21,6 +23,7 @@ import { coverSource } from "../../pages/creation/project-model.js";
 import {
   formatDuration,
   formatMetric,
+  platformAuthKey,
   platformTone,
   visibleBodyText,
 } from "./inspiration-model.js";
@@ -34,6 +37,8 @@ export function InspirationCard({
   onRemove,
   onExtract,
   onRepairMissing,
+  onTranscribe,
+  showHistoricalTranscriptionAction = false,
   onOpenAuth,
   notify,
   referenceMode = false,
@@ -67,6 +72,23 @@ export function InspirationCard({
     navigator.clipboard.writeText(bodyText)
       .then(() => notify("已复制全文"))
       .catch(() => notify("已模拟复制全文"));
+  };
+  const transcriptText = String(item.transcript || "").trim();
+  const transcriptCanRun = Boolean(onTranscribe && String(item.videoLocalPath || "").startsWith("/library-assets/"));
+  const isHistoricalTranscriptionCandidate = !item.transcriptState && transcriptCanRun;
+  const showTranscriptPending = !transcriptText && (
+    Boolean(item.transcriptState)
+    || (showHistoricalTranscriptionAction && isHistoricalTranscriptionCandidate)
+  );
+  const transcriptSourceLabel = {
+    platform_caption: "平台字幕",
+    tencent_asr: "腾讯云免费额度",
+    local_whisper: "本地转写",
+  }[item.transcriptSource] || "逐字稿";
+  const copyTranscript = () => {
+    navigator.clipboard.writeText(transcriptText)
+      .then(() => notify("已复制逐字稿"))
+      .catch(() => notify("逐字稿复制失败"));
   };
 
   useEffect(() => {
@@ -159,6 +181,11 @@ export function InspirationCard({
     { key: "favorites", label: "收藏", Icon: Bookmark },
     { key: "shares", label: "转发", Icon: Share2 },
   ].map((metric) => ({ ...metric, value: formatMetric(item.stats?.[metric.key]) })).filter((metric) => metric.value);
+  const extendedMetrics = [
+    ["播放", item.stats?.views],
+    ["弹幕", item.stats?.danmaku],
+    ["投币", item.stats?.coins],
+  ].map(([label, value]) => [label, formatMetric(value)]).filter(([, value]) => value);
   const meta = [item.author ? `@${item.author.replace(/^@/, "")}` : "", item.publishedAt || ""].filter(Boolean);
   const duration = formatDuration(item.duration);
   const parseState = item.refreshState && item.refreshState !== "success"
@@ -243,6 +270,9 @@ export function InspirationCard({
       <div className="inspiration-content compact-content">
         <h3 title={item.title}>{item.title || "未命名灵感"}</h3>
         <p className="card-byline">{meta.length ? meta.join(" · ") : item.platform}</p>
+        {extendedMetrics.length ? (
+          <p className="card-extended-metrics"><Eye size={11} />{extendedMetrics.map(([label, value]) => `${label} ${value}`).join(" · ")}</p>
+        ) : null}
         {showParseStatus && (
           <div className={`parse-status-line ${parseState}`} aria-live="polite">
             <div className="parse-status-heading">
@@ -259,7 +289,7 @@ export function InspirationCard({
                 <button
                   type="button"
                   className="parse-login-button"
-                  onClick={() => onOpenAuth(item.platform === "抖音" ? "douyin" : "xiaohongshu")}
+                  onClick={() => onOpenAuth(platformAuthKey(item.platform))}
                 >
                   <ExternalLink size={12} />打开登录
                 </button>
@@ -277,6 +307,26 @@ export function InspirationCard({
                 <i style={{ width: `${progress}%` }} />
               </div>
             )}
+          </div>
+        )}
+        {transcriptText && (
+          <details className="card-transcript">
+            <summary>
+              <span><FileText size={13} />逐字稿</span>
+              <small>{transcriptSourceLabel}</small>
+            </summary>
+            <div className="card-transcript-content">
+              <p>{transcriptText}</p>
+              <button type="button" onClick={copyTranscript}><Copy size={13} />复制逐字稿</button>
+            </div>
+          </details>
+        )}
+        {showTranscriptPending && (
+          <div className={`card-transcript-pending is-${item.transcriptState || "waiting_media"}`}>
+            <span><FileText size={13} />{item.transcriptStatus || "本地视频已保存，可生成逐字稿"}</span>
+            {transcriptCanRun ? (
+              <button type="button" onClick={() => onTranscribe(item)}><RefreshCw size={12} />{isHistoricalTranscriptionCandidate ? "生成逐字稿" : "重试转写"}</button>
+            ) : null}
           </div>
         )}
         <div className="card-body-editor">

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Inbox,
   Link2,
@@ -12,6 +12,10 @@ import {
 import { InspirationCard } from "../../features/inspirations/InspirationCard.jsx";
 import {
   applyExtraction,
+  platformAuthKey,
+  inspirationSortOptions,
+  requiresInspirationAttention,
+  sortInspirationItems,
 } from "../../features/inspirations/inspiration-model.js";
 import "./inspirations.css";
 
@@ -41,12 +45,16 @@ function LinkCapture({ categories, onAdd }) {
     if (category && !categories.includes(category)) setCategory("");
   }, [categories, category]);
 
+  const links = Array.from(new Set(
+    [...url.matchAll(/https?:\/\/[^\s"'<>，。]+/gi)].map((match) => match[0].replace(/[)\]}]+$/, "")),
+  ));
+
   const addLink = async () => {
-    if (!url.trim()) return;
+    if (!links.length) return;
     setAdding(true);
     try {
-      const ok = await onAdd(url, category);
-      if (ok !== false) setUrl("");
+      const results = await Promise.all(links.map((link) => onAdd(link, category)));
+      if (results.every((ok) => ok !== false)) setUrl("");
     } finally {
       setAdding(false);
     }
@@ -55,21 +63,217 @@ function LinkCapture({ categories, onAdd }) {
   return (
     <section className="link-capture real-capture" aria-label="添加真实灵感链接">
       <div className="capture-icon"><Link2 size={20} /></div>
-      <input
+      <textarea
         value={url}
         onChange={(event) => setUrl(event.target.value)}
-        onKeyDown={(event) => event.key === "Enter" && addLink()}
-        placeholder="粘贴真实抖音、小红书、B站、视频号、YouTube 或 Instagram 链接"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            void addLink();
+          }
+        }}
+        placeholder="粘贴一条或多条真实链接，批量时一行一条（⌘⏎ 开始）"
         aria-label="真实内容链接"
       />
       <select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="入库分类">
         <option value="">未分类</option>
         {categories.map((item) => <option value={item} key={item}>{item}</option>)}
       </select>
-      <button type="button" className="primary-button" onClick={addLink} disabled={!url.trim() || adding}>
+      <button type="button" className="primary-button" onClick={addLink} disabled={!links.length || adding}>
         {adding ? <RefreshCw size={16} className="spin" /> : <Plus size={16} />}
-        {adding ? "扒取中" : "添加灵感"}
+        {adding ? `正在处理 ${links.length} 条` : links.length > 1 ? `批量添加 ${links.length} 条` : "添加灵感"}
       </button>
+    </section>
+  );
+}
+
+function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, authStatus, onOpenAuth, onRefreshAuth }) {
+  const [profileUrl, setProfileUrl] = useState("");
+  const [transcribe, setTranscribe] = useState(true);
+  const [batch, setBatch] = useState(null);
+  const [starting, setStarting] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [secretId, setSecretId] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [asrStatus, setAsrStatus] = useState(null);
+  const lastAppliedUpdate = useRef("");
+  const autoResumeKeys = useRef(new Set());
+
+  useEffect(() => {
+    fetch("/api/transcription/status").then((response) => response.json()).then(setAsrStatus).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!storage?.sessionId) return;
+    fetch("/api/profile-scans", {
+      headers: { "x-library-session-id": storage.sessionId },
+    }).then((response) => response.json()).then((result) => {
+      const resumable = (result.batches || []).find((item) => !["complete", "ready"].includes(item?.state));
+      if (resumable) setBatch(resumable);
+    }).catch(() => {});
+  }, [storage?.sessionId]);
+
+  useEffect(() => {
+    onBatchChange?.(batch);
+  }, [batch, onBatchChange]);
+
+  const refreshLibrary = async () => {
+    const response = await fetch("/api/library");
+    if (response.ok) onApplyLibrary?.(await response.json());
+  };
+
+  useEffect(() => {
+    if (!batch?.id || ["complete", "failed", "ready", "waiting_login", "waiting_verification"].includes(batch.state)) return undefined;
+    const timer = window.setInterval(async () => {
+      const response = await fetch(`/api/profile-scans?id=${encodeURIComponent(batch.id)}`, {
+        headers: { "x-library-session-id": storage?.sessionId || "" },
+      });
+      const result = await response.json();
+      if (!response.ok || !result.batch) return;
+      setBatch(result.batch);
+      if (result.batch.updatedAt !== lastAppliedUpdate.current) {
+        lastAppliedUpdate.current = result.batch.updatedAt;
+        await refreshLibrary();
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [batch?.id, batch?.state, storage?.sessionId]);
+
+  const resume = async () => {
+    if (!batch?.id) return;
+    const response = await fetch("/api/profile-scans", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-library-session-id": storage?.sessionId || "",
+      },
+      body: JSON.stringify({ resumeId: batch.id }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "主页扫描续跑失败");
+    setBatch(result.batch);
+  };
+
+  useEffect(() => {
+    if (!batch?.id || !["waiting_login", "waiting_verification"].includes(batch.state)) return undefined;
+    const key = batch.platform;
+    if (authStatus?.[key]?.authState === "authenticated") {
+      const resumeKey = `${batch.id}:${batch.updatedAt || ""}`;
+      if (!autoResumeKeys.current.has(resumeKey)) {
+        autoResumeKeys.current.add(resumeKey);
+        void resume().catch((error) => notify(error.message));
+      }
+      return undefined;
+    }
+    const timer = window.setInterval(() => onRefreshAuth?.(true, key), 3000);
+    return () => window.clearInterval(timer);
+  }, [batch?.id, batch?.platform, batch?.state, batch?.updatedAt, authStatus]);
+
+  useEffect(() => {
+    if (!batch?.id || batch.state !== "retry_wait") return undefined;
+    const dueAt = Date.parse(batch.nextRetryAt || "");
+    const delay = Number.isFinite(dueAt) ? Math.max(1000, dueAt - Date.now()) : 5000;
+    const timer = window.setTimeout(() => void resume().catch((error) => notify(error.message)), delay);
+    return () => window.clearTimeout(timer);
+  }, [batch?.id, batch?.state, batch?.nextRetryAt]);
+
+  const start = async () => {
+    if (!profileUrl.trim() || starting) return;
+    setStarting(true);
+    try {
+      const response = await fetch("/api/profile-scans", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-library-session-id": storage?.sessionId || "",
+        },
+        body: JSON.stringify({ profileUrl, autoCollect: true, transcribe }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "主页扫描启动失败");
+      lastAppliedUpdate.current = "";
+      setBatch(result.batch);
+      notify("主页扫描已启动");
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const saveAsr = async () => {
+    const response = await fetch("/api/transcription/configure", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secretId, secretKey }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      notify(result.error || "腾讯云配置保存失败");
+      return;
+    }
+    setAsrStatus(result);
+    setSecretId("");
+    setSecretKey("");
+    setSettingsOpen(false);
+    notify("腾讯云密钥已保存到 macOS 钥匙串");
+  };
+
+  return (
+    <section className="profile-batch-capture" aria-label="主页或作品批量采集">
+      <div className="profile-batch-heading">
+        <div><strong>主页与作品采集</strong><small>自动识别单条作品或扫描主页全部公开作品，去重后写入同一个灵感库</small></div>
+        <label className="profile-transcript-toggle">
+          <input type="checkbox" checked={transcribe} onChange={(event) => setTranscribe(event.target.checked)} />
+          同时生成逐字稿
+        </label>
+        <button type="button" className="text-button" onClick={() => setSettingsOpen((value) => !value)}>
+          {asrStatus?.tencentConfigured ? "腾讯云已配置" : "配置腾讯云免费转写"}
+        </button>
+      </div>
+      {asrStatus?.tencentConfigured ? (
+        <p className="asr-policy-note">
+          {asrStatus.usageCheckAvailable
+            ? `本月免费额度剩余约 ${Math.floor((asrStatus.freeRemainingSeconds || 0) / 60)} 分钟；不足时自动改用本地转写`
+            : "用量核对不可用，为避免付费将只使用本地转写"}
+        </p>
+      ) : null}
+      {settingsOpen ? (
+        <div className="asr-settings-row">
+          <input value={secretId} onChange={(event) => setSecretId(event.target.value)} placeholder="Tencent SecretId" autoComplete="off" />
+          <input value={secretKey} onChange={(event) => setSecretKey(event.target.value)} placeholder="Tencent SecretKey" type="password" autoComplete="new-password" />
+          <button type="button" className="quiet-button" onClick={saveAsr} disabled={!secretId.trim() || !secretKey.trim()}>保存到钥匙串</button>
+        </div>
+      ) : null}
+      <div className="profile-batch-form">
+        <input
+          value={profileUrl}
+          onChange={(event) => setProfileUrl(event.target.value)}
+          onKeyDown={(event) => event.key === "Enter" && start()}
+          placeholder="粘贴平台主页、单条作品或完整分享文字"
+          aria-label="主页或作品链接"
+        />
+        <button type="button" className="quiet-button" onClick={start} disabled={!profileUrl.trim() || starting}>
+          {starting ? <RefreshCw size={16} className="spin" /> : <Search size={16} />}
+          {starting ? "正在启动" : "扫描并自动扒取"}
+        </button>
+      </div>
+      {batch ? (
+        <div className={`profile-batch-status is-${batch.state}`}>
+          <span>{batch.message || batch.state}</span>
+          <small>发现 {batch.foundCount || 0} · 完成 {batch.processedCount || 0} · 已存在 {batch.existingCount || 0} · 异常 {batch.failedCount || 0}</small>
+          {["waiting_login", "waiting_verification"].includes(batch.state) ? (
+            <button type="button" className="quiet-button" onClick={() => onOpenAuth?.(batch.platform)}>
+              <QrCode size={14} />打开专用窗口
+            </button>
+          ) : null}
+          {batch.state === "failed" ? (
+            <button type="button" className="quiet-button" onClick={() => void resume().catch((error) => notify(error.message))}>
+              <RefreshCw size={14} />从中断处继续
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -78,6 +282,10 @@ function AuthPanel({ authStatus, onOpenAuth }) {
   const platforms = [
     { id: "douyin", label: "抖音" },
     { id: "xiaohongshu", label: "小红书" },
+    { id: "bilibili", label: "B站" },
+    { id: "wechat-channels", label: "视频号" },
+    { id: "youtube", label: "YouTube" },
+    { id: "instagram", label: "Instagram" },
   ];
 
   return (
@@ -157,6 +365,15 @@ export function InspirationsPage({
   const [search, setSearch] = useState("");
   const [platform, setPlatform] = useState("全部平台");
   const [category, setCategory] = useState("全部分类");
+  const [sort, setSort] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem("video-content-creation-studio:inspiration-sort");
+      return inspirationSortOptions.some((item) => item.value === stored) ? stored : "collected_desc";
+    } catch {
+      return "collected_desc";
+    }
+  });
+  const [activeBatch, setActiveBatch] = useState(null);
   const autoResumedIds = useRef(new Set());
   const retryTimers = useRef(new Map());
   const autoRetryKeys = useRef(new Set());
@@ -169,17 +386,58 @@ export function InspirationsPage({
   const platforms = [
     "全部平台",
     "已关联",
+    "待处理",
     ...Array.from(new Set(items.map((item) => item.platform)))
-      .filter((item) => item && !["全部平台", "已关联"].includes(item)),
+      .filter((item) => item && !["全部平台", "已关联", "待处理"].includes(item)),
   ];
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("video-content-creation-studio:inspiration-sort", sort);
+    } catch {}
+  }, [sort]);
   const filtered = items.filter((item) => {
-    const matchesSearch = `${item.title}${item.body}${item.author}${item.originalUrl}`.toLowerCase().includes(search.toLowerCase());
+    const matchesSearch = `${item.title}${item.body}${item.transcript || ""}${item.author}${item.originalUrl}`.toLowerCase().includes(search.toLowerCase());
     const matchesPlatform = platform === "全部平台"
-      || (platform === "已关联" ? linkedInspirationIds.has(item.id) : item.platform === platform);
+      || (platform === "已关联"
+        ? linkedInspirationIds.has(item.id)
+        : platform === "待处理"
+          ? requiresInspirationAttention(item)
+          : item.platform === platform);
     const matchesCategory = category === "全部分类"
       || (category === "未分类" ? !categoryValue(item) : categoryValue(item) === category);
     return matchesSearch && matchesPlatform && matchesCategory;
   });
+  const sorted = useMemo(() => sortInspirationItems(filtered, {
+    sort,
+    linkedInspirationIds,
+  }), [filtered, sort, linkedInspirationIds]);
+  const activeBatchContentId = String(activeBatch?.currentContentId || "");
+  const displayed = activeBatchContentId && sorted.some((item) => item.id === activeBatchContentId)
+    ? [
+        sorted.find((item) => item.id === activeBatchContentId),
+        ...sorted.filter((item) => item.id !== activeBatchContentId),
+      ]
+    : sorted;
+  const itemWithBatchProgress = (item) => {
+    if (item.id !== activeBatchContentId || activeBatch?.state !== "collecting") return item;
+    return {
+      ...item,
+      refreshState: "extracting",
+      refreshStatus: activeBatch.currentStage || "正在采集",
+      parseStage: activeBatch.currentStage || item.parseStage || "正在采集",
+      parseProgress: Number(activeBatch.currentProgress) || item.parseProgress || 4,
+    };
+  };
+
+  useEffect(() => {
+    if (!activeBatchContentId) return;
+    setSearch("");
+    setPlatform("全部平台");
+    setCategory("全部分类");
+    window.requestAnimationFrame(() => {
+      document.querySelector(`[data-inspiration-id="${activeBatchContentId}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [activeBatchContentId]);
 
   const categoryCounts = Object.fromEntries(categories.map((item) => [item, items.filter((card) => categoryValue(card) === item).length]));
   const uncategorizedCount = items.filter((item) => !categoryValue(item)).length;
@@ -235,6 +493,7 @@ export function InspirationsPage({
           id: item.id,
           url: item.originalUrl,
           repairMissingOnly,
+          transcribe: !repairMissingOnly,
           generation: item.generation,
           attempt,
         }),
@@ -279,17 +538,36 @@ export function InspirationsPage({
       notify("采集服务暂时中断，已保留内容并安排自动续跑");
     } finally {
       stageTimers.forEach(clearTimeout);
-      const platformKey = item.platform === "抖音"
-        ? "douyin"
-        : item.platform === "小红书" ? "xiaohongshu" : "";
-      if (platformKey) void onRefreshAuth?.(false, platformKey);
+      const authKey = platformAuthKey(item.platform);
+      if (authKey) void onRefreshAuth?.(false, authKey);
+    }
+  };
+
+  const transcribeCard = async (item) => {
+    updateCard(item.id, { transcriptState: "extracting", transcriptStatus: "正在生成逐字稿" });
+    try {
+      const response = await fetch("/api/transcription/run", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-library-session-id": storage?.sessionId || "",
+        },
+        body: JSON.stringify({ id: item.id, generation: item.generation }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "逐字稿生成失败");
+      if (result.library) onApplyLibrary?.(result.library);
+      notify(result.item?.transcript ? "逐字稿已生成" : (result.item?.transcriptStatus || "逐字稿暂未生成"));
+    } catch (error) {
+      updateCard(item.id, { transcriptState: "retry_wait", transcriptStatus: "逐字稿暂未生成", transcriptError: error.message });
+      notify(error.message);
     }
   };
 
   useEffect(() => {
     const waitingPlatforms = new Set(items
       .filter((item) => ["waiting_login", "waiting_verification"].includes(effectiveCaptureState(item)))
-      .map((item) => item.platform === "抖音" ? "douyin" : item.platform === "小红书" ? "xiaohongshu" : "")
+      .map((item) => platformAuthKey(item.platform))
       .filter(Boolean));
     const shouldPoll = [...waitingPlatforms].some((key) => authStatus?.[key]?.authState !== "authenticated");
     if (!shouldPoll) return undefined;
@@ -304,7 +582,7 @@ export function InspirationsPage({
   useEffect(() => {
     items.forEach((item) => {
       if (!["waiting_login", "waiting_verification"].includes(effectiveCaptureState(item))) return;
-      const key = item.platform === "抖音" ? "douyin" : item.platform === "小红书" ? "xiaohongshu" : "";
+      const key = platformAuthKey(item.platform);
       if (!key || authStatus?.[key]?.authState !== "authenticated" || autoResumedIds.current.has(item.id)) return;
       autoResumedIds.current.add(item.id);
       extractCard(item, { automatic: true });
@@ -433,6 +711,15 @@ export function InspirationsPage({
       })}
 
       <LinkCapture categories={categories} onAdd={addLink} />
+      <ProfileBatchCapture
+        storage={storage}
+        onApplyLibrary={onApplyLibrary}
+        onBatchChange={setActiveBatch}
+        notify={notify}
+        authStatus={authStatus}
+        onOpenAuth={onOpenAuth}
+        onRefreshAuth={onRefreshAuth}
+      />
       <AuthPanel authStatus={authStatus} onOpenAuth={onOpenAuth} />
 
       <div className="toolbar-row inspiration-toolbar">
@@ -450,6 +737,12 @@ export function InspirationsPage({
             </button>
           ))}
         </div>
+        <label className="inspiration-sort-control">
+          <span>排序</span>
+          <select value={sort} onChange={(event) => setSort(event.target.value)} aria-label="灵感排序">
+            {inspirationSortOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+        </label>
         <span className="result-count">{filtered.length} 条灵感</span>
       </div>
 
@@ -462,11 +755,11 @@ export function InspirationsPage({
         <button type="button" className="category-add-button" onClick={openCategoryManager}><Plus size={14} />新增分类</button>
       </div>
 
-      {filtered.length ? (
+      {displayed.length ? (
         <section className="inspiration-grid" aria-label="灵感卡片">
-          {filtered.map((item) => (
+          {displayed.map((item) => (
             <InspirationCard
-              item={item}
+              item={itemWithBatchProgress(item)}
               categories={categories}
               isLinked={linkedInspirationIds.has(item.id)}
               categoryValue={categoryValue}
@@ -475,6 +768,8 @@ export function InspirationsPage({
               onBodyChange={(id, value) => updateCard(id, { body: value }, { persist: true, delay: 450 })}
               onExtract={extractCard}
               onRepairMissing={(card) => extractCard(card, { repairMissingOnly: true })}
+              onTranscribe={transcribeCard}
+              showHistoricalTranscriptionAction={platform === "待处理"}
               onOpenAuth={onOpenAuth}
               onRemove={() => removeCard(item)}
               onCreate={onCreate}

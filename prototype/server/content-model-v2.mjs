@@ -37,6 +37,10 @@ function sourcePlatformKey(value = "") {
   const platform = nonEmpty(value).toLowerCase();
   if (platform.includes("小红书") || platform.includes("xiaohongshu") || platform.includes("xhs")) return "xhs";
   if (platform.includes("抖音") || platform.includes("douyin")) return "douyin";
+  if (platform.includes("哔哩") || platform.includes("b站") || platform.includes("bilibili") || platform.includes("b23.tv")) return "bilibili";
+  if (platform.includes("视频号") || platform.includes("channels.weixin") || platform.includes("weixin.qq.com")) return "wechat-channels";
+  if (platform.includes("youtube") || platform.includes("youtu.be")) return "youtube";
+  if (platform.includes("instagram")) return "instagram";
   return platform || "unknown";
 }
 
@@ -56,6 +60,31 @@ function sourceKeyFromUrl(item = {}) {
   if (platform === "douyin") {
     const videoId = url.match(/(?:video|modal_id)[=/](\d{10,})/i)?.[1] || "";
     return videoId ? `douyin:${videoId}` : "";
+  }
+  if (platform === "bilibili") {
+    const bvid = url.match(/\/(BV[0-9A-Za-z]+)/i)?.[1] || "";
+    const aid = url.match(/\/av(\d+)/i)?.[1] || "";
+    return bvid ? `bilibili:${bvid}` : aid ? `bilibili:av${aid}` : "";
+  }
+  if (platform === "youtube") {
+    const parsed = new URL(url, "https://www.youtube.com");
+    const videoId = parsed.hostname.endsWith("youtu.be")
+      ? parsed.pathname.split("/").filter(Boolean)[0]
+      : parsed.searchParams.get("v") || parsed.pathname.match(/\/(?:shorts|embed)\/([^/?#]+)/)?.[1];
+    return videoId ? `youtube:${videoId}` : "";
+  }
+  if (platform === "instagram") {
+    const shortcode = url.match(/\/(?:p|reel|tv)\/([^/?#]+)/i)?.[1] || "";
+    return shortcode ? `instagram:${shortcode}` : "";
+  }
+  if (platform === "wechat-channels") {
+    try {
+      const parsed = new URL(url);
+      const itemId = parsed.searchParams.get("feed_id") || parsed.searchParams.get("objectId") || parsed.searchParams.get("id") || "";
+      return itemId ? `wechat-channels:${itemId}` : "";
+    } catch {
+      return "";
+    }
   }
   return "";
 }
@@ -143,6 +172,7 @@ function normalizedMetrics(item) {
   if (item.stats && typeof item.stats === "object") {
     return [{
       capturedAt: item.capturedAt || item.updatedAt || "",
+      ...item.stats,
       likes: asString(item.stats.likes),
       favorites: asString(item.stats.favorites),
       comments: asString(item.stats.comments),
@@ -173,12 +203,18 @@ function normalizeUnit(item) {
     contentType: item.contentType || (item.images?.length ? "image_set" : (item.videoLocalPath ? "video" : "mixed")),
     title: asString(item.title),
     body: asString(item.body),
+    transcript: asString(item.transcript),
+    transcriptSource: asString(item.transcriptSource),
+    transcriptState: asString(item.transcriptState),
+    transcriptStatus: asString(item.transcriptStatus),
     category: asString(item.category),
     source: {
       platform: asString(item.source?.platform || item.platform),
       originalUrl: asString(item.source?.originalUrl || item.originalUrl),
       canonicalSourceKey: sourceKey(item),
       platformItemId: asString(item.source?.platformItemId || item.platformItemId),
+      accountId: asString(item.source?.accountId || item.authorId),
+      accountUrl: asString(item.source?.accountUrl || item.authorUrl),
       accountName: asString(item.source?.accountName || item.author),
       publishedAt: asString(item.source?.publishedAt || item.publishedAt),
     },

@@ -3,7 +3,7 @@
   "productName": "视频内容创作中台",
   "description": "面向真实内容生产流程的本地视频创作工作台",
   "author": "引力环球",
-  "version": "0.1.0",
+  "version": "0.2.0-dev.0",
   "license": "MIT",
   "homepage": "https://github.com/maxmaximage-hash/video-content-creation-studio#readme",
   "repository": {
@@ -29,12 +29,16 @@
     "desktop:pack": "node scripts/package-desktop.mjs",
     "desktop:pack:arm64": "node scripts/package-desktop.mjs --arch arm64",
     "desktop:pack:x64": "node scripts/package-desktop.mjs --arch x64",
-    "desktop:install": "node scripts/install-macos.mjs --open"
+    "desktop:install": "node scripts/install-macos.mjs --open",
+    "runtime:prepare": "node scripts/prepare-transcription-runtime.mjs",
+    "version:status": "node scripts/version-status.mjs",
+    "release:check": "node scripts/verify-release.mjs"
   },
   "build": {
     "appId": "com.yinli.video-content-creation-studio",
     "productName": "视频内容创作中台",
     "asar": true,
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"
     },
@@ -45,6 +49,13 @@
       "vite.config.mjs",
       "package.json",
       "public/app-icon.png"
+    ],
+    "extraResources": [
+      {
+        "from": "runtime",
+        "to": "runtime",
+        "filter": ["**/*", "!.cache/**/*", "!.tools/**/*"]
+      }
     ],
     "mac": {
       "category": "public.app-category.productivity",

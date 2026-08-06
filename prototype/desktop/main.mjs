@@ -99,9 +99,11 @@ async function launchLocalAppServer() {
   const initialLibraryDir = await readInitialLibraryDir();
   activeLibraryDir = initialLibraryDir;
   process.env.VIDEO_CONTENT_AUTH_ROOT ||= path.join(app.getPath("userData"), "auth-browser");
+  process.env.VIDEO_STUDIO_RUNTIME_ROOT ||= path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), "runtime");
   let apiPlugin;
   apiPlugin = libraryApiPlugin({
     initialLibraryDir,
+    allowImplicitCreate: smokeTest,
     chooseLibraryPath,
     onStateChange: async (state) => {
       const storage = apiPlugin.getLibraryStorage();
@@ -126,12 +128,13 @@ async function launchLocalAppServer() {
       open: false,
     },
   });
-  return { server, url: `http://127.0.0.1:${port}/` };
+  return { server, apiPlugin, url: `http://127.0.0.1:${port}/` };
 }
 
 const localAppServer = createReusableServerLifecycle(
   launchLocalAppServer,
-  async ({ server }) => {
+  async ({ server, apiPlugin }) => {
+    await apiPlugin?.dispose?.();
     await new Promise((resolve) => server?.httpServer?.close(resolve) || resolve());
   },
 );

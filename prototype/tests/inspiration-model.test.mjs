@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyExtraction, collectReferencedInspirationIds } from "../src/features/inspirations/inspiration-model.js";
+import {
+  applyExtraction,
+  collectReferencedInspirationIds,
+  requiresInspirationAttention,
+  sortInspirationItems,
+} from "../src/features/inspirations/inspiration-model.js";
 
 test("failed and waiting recaptures preserve prior successful copy and local media", () => {
   const card = {
@@ -59,4 +64,38 @@ test("legacy reference objects accept canonical ID fields and discard invalid ID
     projects: [{ relationships: { referenceContentIds: ["I000103", "bad"] } }],
   });
   assert.deepEqual([...ids].sort(), ["I000101", "I000102", "I000103"]);
+});
+
+test("inspiration sorting is deterministic and keeps collection time independent from later edits", () => {
+  const items = [
+    { id: "I000003", capturedAt: "2026.08.03 10:00", updatedAt: "2026.08.06 10:00", publishedAt: "2026.07.01 10:00", stats: { likes: "1.2万", favorites: "20" } },
+    { id: "I000001", capturedAt: "2026.08.05 10:00", updatedAt: "2026.08.05 10:00", publishedAt: "2026.08.01 10:00", stats: { likes: "999", favorites: "2.3万" } },
+    { id: "I000002", capturedAt: "2026.08.04 10:00", updatedAt: "2026.08.04 10:00", publishedAt: "", stats: { likes: "15000", favorites: "3" } },
+  ];
+  assert.deepEqual(sortInspirationItems(items).map((item) => item.id), ["I000001", "I000002", "I000003"]);
+  assert.deepEqual(sortInspirationItems(items, { sort: "collected_asc" }).map((item) => item.id), ["I000003", "I000002", "I000001"]);
+  assert.deepEqual(sortInspirationItems(items, { sort: "published_desc" }).map((item) => item.id), ["I000001", "I000003", "I000002"]);
+  assert.deepEqual(sortInspirationItems(items, { sort: "likes_desc" }).map((item) => item.id), ["I000002", "I000003", "I000001"]);
+  assert.deepEqual(sortInspirationItems(items, { sort: "favorites_desc" }).map((item) => item.id), ["I000001", "I000003", "I000002"]);
+  assert.deepEqual(sortInspirationItems(items, {
+    sort: "recently_referenced",
+    linkedInspirationIds: new Set(["I000003"]),
+  }).map((item) => item.id), ["I000003", "I000001", "I000002"]);
+});
+
+test("recent collection keeps new ISO cards ahead of legacy dotted timestamps", () => {
+  const items = [
+    { id: "I000023", capturedAt: "2026.07.26 00:04" },
+    { id: "I000056", capturedAt: "2026-08-06T12:03:12.783Z" },
+  ];
+  assert.deepEqual(sortInspirationItems(items).map((item) => item.id), ["I000056", "I000023"]);
+});
+
+test("attention filter finds unfinished captures, missing media, and local videos without a transcript", () => {
+  assert.equal(requiresInspirationAttention({ parseState: "waiting_login" }), true);
+  assert.equal(requiresInspirationAttention({ refreshState: "retry_wait", parseState: "success" }), true);
+  assert.equal(requiresInspirationAttention({ mediaAvailability: "missing" }), true);
+  assert.equal(requiresInspirationAttention({ videoLocalPath: "/library-assets/content-units/I000001/media/captured-video/video.mp4" }), true);
+  assert.equal(requiresInspirationAttention({ videoLocalPath: "/library-assets/content-units/I000001/media/captured-video/video.mp4", transcript: "已有逐字稿" }), false);
+  assert.equal(requiresInspirationAttention({ parseState: "success", mediaAvailability: "available" }), false);
 });

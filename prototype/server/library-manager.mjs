@@ -3,6 +3,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isPathInside } from "./path-security.mjs";
 import { withContentModelV2 } from "./content-model-v2.mjs";
+import { createLibraryWriteLease } from "./library-lock.mjs";
+import { createLibraryIndexBackup } from "./library-backups.mjs";
 
 export const LIBRARY_KIND = "video-content-creation-demo";
 export const DEFAULT_LIBRARY_NAME = "视频内容创作中台 Demo.library";
@@ -36,6 +38,8 @@ function emptyLibrary(libraryName) {
   const now = new Date().toISOString();
   return {
     schemaVersion: 2,
+    libraryRevision: 1,
+    libraryEpoch: 1,
     libraryKind: LIBRARY_KIND,
     libraryName,
     createdAt: now,
@@ -53,6 +57,7 @@ function emptyLibrary(libraryName) {
     contentRevisions: [],
     metricsSnapshots: [],
     duplicateGroups: [],
+    captureBatches: [],
   };
 }
 
@@ -97,9 +102,6 @@ function persistedShape(data = {}) {
     categories: Array.isArray(data.categories) ? data.categories : [],
     userDefinedCategories: Array.isArray(data.userDefinedCategories) ? data.userDefinedCategories : undefined,
     inspirations: Array.isArray(data.inspirations) ? data.inspirations : [],
-    inspirationTombstones: data.inspirationTombstones && typeof data.inspirationTombstones === "object"
-      ? data.inspirationTombstones
-      : {},
     projects: Array.isArray(data.projects) ? data.projects : [],
     archive: Array.isArray(data.archive) ? data.archive : [],
     activeProject: data.activeProject || null,
@@ -114,6 +116,9 @@ function persistedShape(data = {}) {
     contentRevisions: Array.isArray(data.contentRevisions) ? data.contentRevisions : [],
     metricsSnapshots: Array.isArray(data.metricsSnapshots) ? data.metricsSnapshots : [],
     duplicateGroups: Array.isArray(data.duplicateGroups) ? data.duplicateGroups : [],
+    captureBatches: Array.isArray(data.captureBatches) ? data.captureBatches : [],
+    libraryRevision: Number(data.libraryRevision) || 1,
+    libraryEpoch: Number(data.libraryEpoch) || 1,
   };
 }
 
@@ -124,6 +129,24 @@ function persistedCount(data = {}) {
 function isEmptyReplacement(payload = {}) {
   return ["inspirations", "projects", "archive"].every((key) => Array.isArray(payload[key]) && payload[key].length === 0)
     && !payload.activeProject;
+}
+
+function assertSafeReplacement(current = {}, next = {}) {
+  const currentCount = persistedCount(current);
+  const nextCount = persistedCount(next);
+  if (currentCount > 0 && nextCount === 0 && !next.activeProject) {
+    throw libraryError("非空资料库禁止被空数据覆盖；如需清理必须逐条走安全删除", 409, {
+      code: "LIBRARY_EMPTY_REPLACEMENT_BLOCKED",
+    });
+  }
+  const drop = currentCount - nextCount;
+  if (currentCount >= 10 && drop >= 5 && drop / currentCount >= 0.5) {
+    throw libraryError("本次写入将使资料库记录数异常骤降，已阻止保存", 409, {
+      code: "LIBRARY_SUSPICIOUS_SHRINK_BLOCKED",
+      previousCount: currentCount,
+      nextCount,
+    });
+  }
 }
 
 function safeContentId(value) {
@@ -294,11 +317,18 @@ async function syncContentUnitItems(paths, items) {
       contentType: item.contentType || (item.images?.length ? "image_set" : (item.videoLocalPath || canonicalMediaAssets(item).some((asset) => asset.role.endsWith("_video")) ? "video" : "text")),
       title: item.title || "",
       body: item.body || "",
+      transcript: item.transcript || "",
+      transcriptSource: item.transcriptSource || "",
+      transcriptState: item.transcriptState || "",
+      transcriptStatus: item.transcriptStatus || "",
       category: item.category || "",
       source: {
         platform: item.source?.platform || item.platform || "",
         originalUrl: item.source?.originalUrl || item.originalUrl || "",
         canonicalSourceKey: item.source?.canonicalSourceKey || item.canonicalSourceKey || "",
+        platformItemId: item.source?.platformItemId || item.platformItemId || "",
+        accountId: item.source?.accountId || item.authorId || "",
+        accountUrl: item.source?.accountUrl || item.authorUrl || "",
         accountName: item.source?.accountName || item.author || "",
         publishedAt: item.source?.publishedAt || item.publishedAt || "",
       },
@@ -324,6 +354,7 @@ async function syncContentUnitItems(paths, items) {
       writeAtomicText(path.join(unitRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`),
       writeAtomicText(path.join(unitRoot, "copy/title.txt"), `${item.title || ""}\n`),
       writeAtomicText(path.join(unitRoot, "copy/body.txt"), `${item.body || ""}\n`),
+      writeAtomicText(path.join(unitRoot, "copy/transcript.txt"), `${item.transcript || ""}\n`),
     ]);
   }
 }
@@ -333,6 +364,8 @@ async function syncContentUnits(paths, data) {
 }
 
 export function createLibraryManager(options = {}) {
+  const allowImplicitCreate = options.allowImplicitCreate === true;
+  const qaMode = options.qaMode === true || process.env.VIDEO_STUDIO_QA_MODE === "1";
   const configuredLibraryRoot = String(process.env.VIDEO_CONTENT_LIBRARY_ROOT || "").trim();
   const configuredInitialLibraryDir = options.initialLibraryDir === undefined
     ? (configuredLibraryRoot ? path.join(configuredLibraryRoot, DEFAULT_LIBRARY_NAME) : null)
@@ -344,9 +377,18 @@ export function createLibraryManager(options = {}) {
   let sessionId = randomUUID();
   let writeQueue = Promise.resolve();
   let revision = 1;
+  let leaseLibraryDir = "";
+  const writeLease = qaMode
+    ? {
+        state: () => ({ owned: true, mode: "read_write", owner: null }),
+        configure: async () => ({ owned: true, mode: "read_write", owner: null }),
+        ensureOwned: async () => ({ owned: true, mode: "read_write", owner: null }),
+        release: async () => {},
+      }
+    : createLibraryWriteLease(options.writeLease || {});
 
   function storage() {
-    return activePaths ? { ...activePaths, sessionId } : null;
+    return activePaths ? { ...activePaths, sessionId, ...writeLease.state() } : null;
   }
 
   function requireActive(expectedSessionId = "") {
@@ -355,19 +397,53 @@ export function createLibraryManager(options = {}) {
     return { ...activePaths, sessionId };
   }
 
+  async function requireWritable(expectedSessionId = "") {
+    const paths = requireActive(expectedSessionId);
+    await ensureCurrentLibrary();
+    await ensureWriteLease(paths);
+    return { ...paths, sessionId, ...writeLease.state() };
+  }
+
   async function ensureFolders(paths) {
     await fs.mkdir(paths.libraryDir, { recursive: true });
     await Promise.all(LIBRARY_FOLDERS.map((folder) => fs.mkdir(path.join(paths.libraryDir, folder), { recursive: true })));
   }
 
+  async function ensureLeaseConfigured(paths) {
+    if (leaseLibraryDir === paths.libraryDir) return writeLease.state();
+    const state = await writeLease.configure(paths.libraryDir);
+    leaseLibraryDir = paths.libraryDir;
+    return state;
+  }
+
+  async function ensureWriteLease(paths) {
+    await ensureLeaseConfigured(paths);
+    return writeLease.ensureOwned();
+  }
+
   async function ensureCurrentLibrary() {
     const paths = requireActive();
-    await ensureFolders(paths);
     try {
-      await fs.access(paths.indexFile);
-    } catch {
-      await fs.writeFile(paths.indexFile, `${JSON.stringify(emptyLibrary(paths.libraryName), null, 2)}\n`, "utf8");
+      const directoryStat = await fs.stat(paths.libraryDir);
+      if (!directoryStat.isDirectory()) throw libraryError("资料库路径不是目录", 503, { code: "LIBRARY_UNAVAILABLE" });
+      const indexStat = await fs.stat(paths.indexFile);
+      if (!indexStat.isFile()) throw libraryError("资料库索引不是文件", 503, { code: "LIBRARY_INDEX_UNAVAILABLE" });
+    } catch (error) {
+      if (allowImplicitCreate && error.code === "ENOENT") {
+        await ensureFolders(paths);
+        await fs.writeFile(paths.indexFile, `${JSON.stringify(emptyLibrary(paths.libraryName), null, 2)}\n`, {
+          encoding: "utf8",
+          flag: "wx",
+        });
+      } else {
+        if (["LIBRARY_UNAVAILABLE", "LIBRARY_INDEX_UNAVAILABLE"].includes(error.code)) throw error;
+        throw libraryError("资料库索引暂时不可用，已保护现有素材；请检查 NAS 挂载和资料库路径", 503, {
+          code: "LIBRARY_INDEX_UNAVAILABLE",
+          cause: error.code || "INDEX_READ_FAILED",
+        });
+      }
     }
+    await ensureLeaseConfigured(paths);
     return paths;
   }
 
@@ -382,10 +458,22 @@ export function createLibraryManager(options = {}) {
   async function validateLibraryDir(inputPath) {
     const selected = pathsFor(inputPath);
     if (!selected.libraryName.endsWith(".library")) throw libraryError("请选择以 .library 结尾的资料库目录");
-    const stat = await fs.stat(selected.libraryDir).catch(() => null);
-    if (!stat?.isDirectory()) throw libraryError("所选资料库目录不存在");
-    const raw = await fs.readFile(selected.indexFile, "utf8").catch(() => null);
-    if (raw === null) throw libraryError("所选目录缺少 library.json");
+    let stat;
+    try {
+      stat = await fs.stat(selected.libraryDir);
+    } catch (error) {
+      throw libraryError("所选资料库目录暂时不可用", 503, { code: "LIBRARY_UNAVAILABLE", cause: error.code || "STAT_FAILED" });
+    }
+    if (!stat.isDirectory()) throw libraryError("所选资料库路径不是目录");
+    let raw;
+    try {
+      raw = await fs.readFile(selected.indexFile, "utf8");
+    } catch (error) {
+      throw libraryError("所选资料库的 library.json 暂时不可读，已禁止创建空索引", 503, {
+        code: "LIBRARY_INDEX_UNAVAILABLE",
+        cause: error.code || "INDEX_READ_FAILED",
+      });
+    }
     let data;
     try {
       data = parseLibraryData(raw);
@@ -399,9 +487,27 @@ export function createLibraryManager(options = {}) {
   async function readLibrary() {
     if (!activePaths) return { libraryOpen: false, sessionId, revision };
     const paths = await ensureCurrentLibrary();
-    const raw = await fs.readFile(paths.indexFile, "utf8");
-    const data = withContentModelV2(parseLibraryData(raw));
+    let raw;
+    try {
+      raw = await fs.readFile(paths.indexFile, "utf8");
+    } catch (error) {
+      throw libraryError("资料库索引暂时不可读，已进入保护状态", 503, {
+        code: "LIBRARY_INDEX_UNAVAILABLE",
+        cause: error.code || "INDEX_READ_FAILED",
+      });
+    }
+    let data;
+    try {
+      data = withContentModelV2(parseLibraryData(raw));
+    } catch (error) {
+      throw libraryError("library.json 无法解析，已禁止任何覆盖写入", 503, {
+        code: "LIBRARY_INDEX_CORRUPT",
+        cause: error.code || "INDEX_PARSE_FAILED",
+      });
+    }
     if (data.libraryKind && data.libraryKind !== LIBRARY_KIND) throw libraryError("当前目录不是视频内容创作中台资料库", 409);
+    delete data.inspirationTombstones;
+    revision = Number(data.libraryRevision) || 1;
     return {
       ...emptyLibrary(paths.libraryName),
       ...data,
@@ -418,11 +524,12 @@ export function createLibraryManager(options = {}) {
     });
   }
 
-  async function assertExpectedRevision(expectedRevision) {
+  async function assertExpectedRevision(expectedRevision, current) {
     if (expectedRevision === "" || expectedRevision === undefined || expectedRevision === null) return;
     const parsed = Number(expectedRevision);
     if (!Number.isSafeInteger(parsed) || parsed < 1) throw libraryError("资料库版本号无效", 400);
-    if (parsed !== revision) throw await currentRevisionConflict();
+    const currentRevision = Number(current?.libraryRevision) || revision || 1;
+    if (parsed !== currentRevision) throw await currentRevisionConflict();
   }
 
   function persistedLibrary(paths, current, payload) {
@@ -437,6 +544,8 @@ export function createLibraryManager(options = {}) {
       libraryName: paths.libraryName,
       libraryKind: LIBRARY_KIND,
       schemaVersion: 2,
+      libraryRevision: Number(current.libraryRevision) || 1,
+      libraryEpoch: Number(current.libraryEpoch) || 1,
       updatedAt: now,
       createdAt: current.createdAt || now,
     };
@@ -444,13 +553,21 @@ export function createLibraryManager(options = {}) {
     delete next.libraryOpen;
     delete next.sessionId;
     delete next.revision;
+    delete next.inspirationTombstones;
     return withContentModelV2(next);
   }
 
-  async function writeIndex(paths, next) {
+  async function writeIndex(paths, next, { label = "write" } = {}) {
+    const currentText = await fs.readFile(paths.indexFile, "utf8");
+    await createLibraryIndexBackup(paths.libraryDir, currentText, { label });
     const temporaryPath = `${paths.indexFile}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-    await fs.rename(temporaryPath, paths.indexFile);
+    await fs.writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+    try {
+      await fs.rename(temporaryPath, paths.indexFile);
+    } catch (error) {
+      await fs.rm(temporaryPath, { force: true }).catch(() => {});
+      throw error;
+    }
   }
 
   function runtimeLibrary(next) {
@@ -459,18 +576,20 @@ export function createLibraryManager(options = {}) {
 
   async function performWriteLibrary(payload, expectedSessionId, expectedRevision) {
     const paths = requireActive(expectedSessionId);
-    await assertExpectedRevision(expectedRevision);
-    await ensureFolders(paths);
     const current = await readLibrary();
-    if (persistedCount(current) > 0 && isEmptyReplacement(payload)) {
-      throw libraryError("非空资料库禁止被空数据覆盖；如需清空必须显式走备份/重置流程", 409);
-    }
+    await assertExpectedRevision(expectedRevision, current);
+    await ensureWriteLease(paths);
+    await ensureFolders(paths);
     const next = persistedLibrary(paths, current, payload);
     if (JSON.stringify(persistedShape(current)) !== JSON.stringify(persistedShape(next))) {
-      await writeIndex(paths, next);
+      if (!qaMode) assertSafeReplacement(current, next);
+      next.libraryRevision = (Number(current.libraryRevision) || 1) + 1;
+      await writeIndex(paths, next, { label: "autosave" });
       await syncContentUnits(paths, next);
       await cleanupTempFiles(paths);
-      revision += 1;
+      revision = next.libraryRevision;
+    } else {
+      revision = Number(current.libraryRevision) || 1;
     }
     return runtimeLibrary(next);
   }
@@ -487,9 +606,10 @@ export function createLibraryManager(options = {}) {
 
   async function performMutation(mutator, expectedSessionId, expectedRevision) {
     const paths = requireActive(expectedSessionId);
-    await assertExpectedRevision(expectedRevision);
-    await ensureFolders(paths);
     const current = await readLibrary();
+    await assertExpectedRevision(expectedRevision, current);
+    await ensureWriteLease(paths);
+    await ensureFolders(paths);
     let mutation;
     let committed = false;
     try {
@@ -501,10 +621,15 @@ export function createLibraryManager(options = {}) {
       });
       const next = persistedLibrary(paths, current, mutation.payload || current);
       if (JSON.stringify(persistedShape(current)) !== JSON.stringify(persistedShape(next))) {
+        if (!mutation.allowDestructiveShrink) assertSafeReplacement(current, next);
         if (mutation.syncItems?.length) await syncContentUnitItems(paths, mutation.syncItems);
-        await writeIndex(paths, next);
+        next.libraryRevision = (Number(current.libraryRevision) || 1) + 1;
+        if (mutation.incrementEpoch) next.libraryEpoch = (Number(current.libraryEpoch) || 1) + 1;
+        await writeIndex(paths, next, { label: mutation.backupLabel || "mutation" });
         await cleanupTempFiles(paths);
-        revision += 1;
+        revision = next.libraryRevision;
+      } else {
+        revision = Number(current.libraryRevision) || 1;
       }
       committed = true;
       await mutation.afterCommit?.({ library: runtimeLibrary(next), paths });
@@ -532,9 +657,10 @@ export function createLibraryManager(options = {}) {
     const normalizedPrefix = String(prefix || "").toUpperCase();
     if (!["I", "C"].includes(normalizedPrefix)) throw libraryError("内容 ID 前缀无效");
     const paths = requireActive(expectedSessionId);
-    await assertExpectedRevision(expectedRevision);
-    await ensureFolders(paths);
     const current = await readLibrary();
+    await assertExpectedRevision(expectedRevision, current);
+    await ensureWriteLease(paths);
+    await ensureFolders(paths);
     const indexedItems = [
       ...(current.inspirations || []),
       ...(current.projects || []),
@@ -566,12 +692,11 @@ export function createLibraryManager(options = {}) {
       sessionId: undefined,
       revision: undefined,
       updatedAt: new Date().toISOString(),
+      libraryRevision: (Number(current.libraryRevision) || 1) + 1,
     };
-    const temporaryPath = `${paths.indexFile}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
-    await fs.rename(temporaryPath, paths.indexFile);
+    await writeIndex(paths, next, { label: "allocate-id" });
     await cleanupTempFiles(paths);
-    revision += 1;
+    revision = next.libraryRevision;
     return { contentId, contentIdCounters: next.contentIdCounters, storage: storage(), revision };
   }
 
@@ -593,7 +718,7 @@ export function createLibraryManager(options = {}) {
     activePaths = paths;
     sessionId = randomUUID();
     revision += 1;
-    await ensureFolders(paths);
+    await ensureCurrentLibrary();
     await notifyStateChange();
     return readLibrary();
   }
@@ -630,6 +755,8 @@ export function createLibraryManager(options = {}) {
       return activate(validated.paths);
     }
     if (action === "close") {
+      await writeLease.release();
+      leaseLibraryDir = "";
       activePaths = null;
       sessionId = randomUUID();
       revision += 1;
@@ -638,22 +765,31 @@ export function createLibraryManager(options = {}) {
     }
     if (action === "rename") {
       const current = requireActive(payload.sessionId || "");
+      await ensureWriteLease(current);
       const nextName = normalizedLibraryName(payload.name);
       if (nextName === current.libraryName) return readLibrary();
       const nextPaths = pathsFor(path.join(current.root, nextName));
       const collision = await fs.stat(nextPaths.libraryDir).catch(() => null);
       if (collision) throw libraryError("同一位置已经存在这个名称", 409);
       await fs.rename(current.libraryDir, nextPaths.libraryDir);
+      await writeLease.release();
+      leaseLibraryDir = "";
       activePaths = nextPaths;
       sessionId = randomUUID();
       revision += 1;
       try {
         const data = await readLibrary();
         const persisted = { ...data, storage: undefined, libraryOpen: undefined, sessionId: undefined, revision: undefined, libraryName: nextName, updatedAt: new Date().toISOString() };
-        await fs.writeFile(nextPaths.indexFile, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
+        await ensureLeaseConfigured(nextPaths);
+        persisted.libraryRevision = (Number(persisted.libraryRevision) || 1) + 1;
+        await writeIndex(nextPaths, persisted, { label: "rename" });
+        revision = persisted.libraryRevision;
       } catch (error) {
+        await writeLease.release().catch(() => {});
+        leaseLibraryDir = "";
         await fs.rename(nextPaths.libraryDir, current.libraryDir).catch(() => {});
         activePaths = pathsFor(current.libraryDir);
+        await ensureLeaseConfigured(activePaths).catch(() => {});
         sessionId = randomUUID();
         revision += 1;
         throw error;
@@ -667,6 +803,7 @@ export function createLibraryManager(options = {}) {
   return {
     storage,
     requireActive,
+    requireWritable,
     ensureCurrentLibrary,
     readLibrary,
     writeLibrary,
@@ -674,5 +811,10 @@ export function createLibraryManager(options = {}) {
     allocateContentId,
     manage,
     validateLibraryDir,
+    async dispose() {
+      await writeQueue.catch(() => {});
+      await writeLease.release();
+      leaseLibraryDir = "";
+    },
   };
 }

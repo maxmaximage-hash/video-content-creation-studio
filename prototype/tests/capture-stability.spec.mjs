@@ -126,7 +126,7 @@ test("delete preserves the card on API failure and removes it only after success
   current.inspirations.push(inspiration({ id: "I000802", title: "保留的灵感" }));
   let deleteAttempts = 0;
   await page.route("**/api/auth/**", (route) => route.fulfill({ json: {} }));
-  await page.route("**/api/inspirations/I000801", async (route) => {
+  await page.route("**/api/content/I000801", async (route) => {
     deleteAttempts += 1;
     if (deleteAttempts === 1) {
       await route.fulfill({ status: 503, json: { error: "当前资料库不可访问" } });
@@ -144,7 +144,7 @@ test("delete preserves the card on API failure and removes it only after success
   await card.locator('summary[aria-label="更多操作"]').click();
   await card.getByRole("button", { name: "删除灵感" }).click();
   await expect(card).toBeVisible();
-  await expect(page.locator(".toast")).toContainText("删除未提交");
+  await expect(page.locator(".toast")).toContainText("删除失败");
 
   const overflow = card.locator("details.card-overflow");
   if (!await overflow.evaluate((element) => element.open)) {
@@ -195,4 +195,57 @@ test("retry_wait resumes once after restart with the same ID and generation", as
   expect(requests[0].attempt).toBe(3);
   await page.waitForTimeout(1200);
   expect(requests).toHaveLength(1);
+});
+
+test("profile batch immediately promotes the active card and shows its live stage", async ({ page, request }) => {
+  await seed(request, { id: "I000801", title: "其他灵感", parseState: "success", refreshState: "success" });
+  const current = await (await request.get("/api/library")).json();
+  current.inspirations.push(inspiration({
+    id: "I000802",
+    title: "正在采集的真实卡片",
+    parseState: "success",
+    refreshState: "success",
+  }));
+  await request.post("/api/library", { data: current });
+  let statusPolls = 0;
+  await page.route("**/api/profile-scans*", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({ status: 202, json: { batch: {
+        id: "B-live-card",
+        platform: "douyin",
+        state: "scanning",
+        foundCount: 0,
+        processedCount: 0,
+        updatedAt: "2026-08-04T07:00:00.000Z",
+      } } });
+      return;
+    }
+    if (!new URL(route.request().url()).searchParams.get("id")) {
+      await route.fulfill({ json: { batches: [] } });
+      return;
+    }
+    statusPolls += 1;
+    await route.fulfill({ json: { batch: {
+      id: "B-live-card",
+      platform: "douyin",
+      state: "collecting",
+      foundCount: 1,
+      processedCount: 0,
+      existingCount: 1,
+      currentContentId: "I000802",
+      currentGeneration: 1,
+      currentStage: "正在读取作品页面",
+      currentProgress: 38,
+      message: "正在采集 1/1",
+      updatedAt: `2026-08-04T07:00:0${statusPolls}.000Z`,
+    } } });
+  });
+
+  await page.goto("/");
+  await page.getByRole("textbox", { name: "主页或作品链接" }).fill("https://www.douyin.com/video/802");
+  await page.getByRole("button", { name: "扫描并自动扒取" }).click();
+  const firstCard = page.locator(".inspiration-grid .inspiration-card").first();
+  await expect(firstCard).toHaveAttribute("data-inspiration-id", "I000802", { timeout: 8000 });
+  await expect(firstCard.locator(".parse-status-line.extracting")).toContainText("正在读取作品页面");
+  await expect(firstCard.locator('[role="progressbar"]')).toHaveAttribute("aria-valuenow", "38");
 });

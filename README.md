@@ -1,6 +1,6 @@
 # 视频内容创作中台
 
-一个面向真实内容生产流程的本地优先 macOS 桌面应用。它把抖音、小红书灵感采集、内容创作、双账号素材管理、待发布排期和发布归档放进同一个 `.library` 资料库。
+一个面向真实内容生产流程的本地优先 macOS 桌面应用。它把抖音、小红书、B 站、视频号、YouTube 和 Instagram 灵感采集、内容创作、双账号素材管理、待发布排期和发布归档放进同一个 `.library` 资料库。
 
 [![macOS CI](https://github.com/maxmaximage-hash/video-content-creation-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/maxmaximage-hash/video-content-creation-studio/actions/workflows/ci.yml)
 
@@ -28,9 +28,12 @@
 
 ### 灵感库
 
-- 粘贴抖音或小红书真实分享链接，生成同一种灵感卡片。
-- 使用独立的可见 Chromium 登录窗口保存平台会话。
-- 保存标题、正文、作者、发布时间、互动数据、封面、图文图片或视频。
+- 粘贴六个已支持平台的真实链接，生成同一种灵感卡片。
+- 单条、多行批量链接与博主主页全量扫描共用同一套去重和入库逻辑。
+- 主页任务保存候选列表和当前进度，登录失效、通道冷却或应用重启后可从中断处续跑。
+- 每个平台使用独立的可见 Chromium 登录窗口保存会话。
+- 保存标题、正文、作者/账号、发布时间、已暴露互动数据、封面、图文图片、视频和逐字稿。
+- 逐字稿按“平台字幕 → 腾讯云当月免费额度 → 本地 Whisper”执行，卡片内可展开和复制。
 - 本地媒体进入当前 `.library`，不是依赖远程 URL 的临时预览。
 - 搜索、平台筛选、用户分类和“已关联”筛选可以组合使用。
 - 从灵感直接新建创作，或加入已有创作。
@@ -116,7 +119,7 @@ npm run desktop:install
 
 1. 在欢迎页点击“新建资料库”或“打开资料库”。
 2. 建议把 Library 放在本机 `Documents`，或一个稳定挂载且具有读写权限的 NAS 目录。
-3. 打开灵感库，分别点击抖音、小红书的登录按钮。
+3. 打开灵感库，只为自己要使用的平台打开对应专用登录窗口。
 4. 在弹出的专用浏览器中完成平台登录或人工验证。
 5. 返回应用，粘贴真实链接开始采集。
 
@@ -124,7 +127,9 @@ npm run desktop:install
 
 ## API Key 与配置
 
-当前版本不需要第三方 API Key。抖音和小红书采集通过独立、可见的 Chromium 会话完成，平台 Cookie 只保存在本机：
+平台采集本身不需要 API Key。如果希望在本地转写前优先使用腾讯云当月免费的录音文件识别，可在灵感库内配置 Tencent Cloud `SecretId` 和 `SecretKey`。密钥只存在 macOS 钥匙串，不写入 `.library` 或仓库。
+
+平台 Cookie 只保存在本机：
 
 ```text
 ~/Library/Application Support/视频内容创作中台/auth-browser/
@@ -142,6 +147,7 @@ npm run desktop:install
       manifest.json
       copy/title.txt
       copy/body.txt
+      copy/transcript.txt
       covers/
       media/images/
       media/captured-video/
@@ -182,7 +188,7 @@ npm run desktop:install
 
 ## 平台稳定性边界
 
-采集器会在公开页面、登录会话和备用数据通道之间自动选择，并对临时网络、限流和会话异常做分类处理。但平台可能要求登录、验证码或人工安全验证，也可能限制私密、删除、地区或年龄受限内容。
+六个平台各自拥有独立的适配器、登录 profile、采集队列和恢复状态。采集器会在公开页面、登录会话和备用数据通道之间自动选择，并对临时网络、限流和会话异常做分类处理。但平台可能要求登录、验证码或人工安全验证，也可能限制私密、删除、地区或年龄受限内容。
 
 因此不能承诺任何第三方平台链接永久 100% 可采集。发布验收必须使用用户提供的真实链接在安装后的真实应用中完成；单元测试和模拟网络只能作为防回退证据。
 
@@ -208,6 +214,22 @@ npm run desktop:install    # 构建并安装到 /Applications
 npm run docs:screenshots   # 重新生成脱敏文档截图
 ```
 
+## 版本与 GitHub 同步
+
+项目按版本批次发布，不为每个小 bug 单独发布：
+
+- 日常改动进入 `codex/vX.Y.Z-workbench` 开发分支，并继续默认安装到本机真实应用验收。
+- `main` 只保留已经完成真实应用验收的稳定版本。
+- 一轮改动完成后统一更新版本号和 Changelog，再合并、推送并创建 `vX.Y.Z` 标签。
+- 标签会自动构建 Apple Silicon 应用并创建 GitHub Release。
+- 应用导航栏显示版本号、Git commit 和未提交状态，便于确认本机安装包对应哪份源码。
+
+完整流程见 [版本开发与 GitHub 发布流程](docs/release-workflow.md)。
+
+## 后续路线
+
+手机异地链接收集、更多平台主页扫描、批量采集和云端免费额度优先的逐字稿能力已经记录在 [产品路线](docs/roadmap.md)。这些能力会继续进入同一个灵感库和同一套 Library 数据模型，不会另起一套手机专属资产结构。
+
 ## 文档
 
 - [Codex 安装任务书](INSTALL_WITH_CODEX.md)
@@ -215,6 +237,8 @@ npm run docs:screenshots   # 重新生成脱敏文档截图
 - [配置、登录与 API Key](docs/configuration.md)
 - [架构和数据模型](docs/architecture.md)
 - [故障排查](docs/troubleshooting.md)
+- [版本开发与 GitHub 发布流程](docs/release-workflow.md)
+- [产品路线](docs/roadmap.md)
 - [贡献指南](CONTRIBUTING.md)
 - [安全策略](SECURITY.md)
 - [版本记录](CHANGELOG.md)

@@ -86,6 +86,8 @@ npm ci
 npm run desktop:install
 ```
 
+仓库 `main` 只保留已验收稳定版本。安装后可在应用导航栏右侧查看版本号和 Git commit；如果显示“未提交”，说明安装包来自本机尚未进入 Git 历史的开发改动。
+
 安装脚本只替换 Bundle ID 为 `com.yinli.video-content-creation-studio` 的应用，不会修改：
 
 - 用户选择的 `.library`。

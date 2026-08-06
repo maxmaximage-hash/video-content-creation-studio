@@ -26,6 +26,11 @@ prototype/playwright-report/
 prototype/qa/
 prototype/public/qa/
 prototype/index-*.js
+prototype/runtime/.cache/
+prototype/runtime/.tools/
+prototype/runtime/arm64/
+prototype/runtime/x64/
+prototype/runtime/shared/ggml-small.bin
 graphify-out/
 prototype/src/graphify-out/
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createLibraryManager, LIBRARY_FOLDERS, LIBRARY_KIND } from "../server/library-manager.mjs";
+import { createLibraryWriteLease } from "../server/library-lock.mjs";
 
 test("new, rename, close and reopen preserve one library without stale writes", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-library-manager-"));
@@ -71,6 +72,64 @@ test("invalid libraries and rename collisions are rejected without changing the 
     (error) => error.statusCode === 409,
   );
   assert.equal((await manager.readLibrary()).storage.libraryName, "当前.library");
+});
+
+test("missing NAS index is protected and never replaced with an empty library", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-library-index-protection-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const manager = createLibraryManager({ initialLibraryDir: null });
+  t.after(() => manager.dispose());
+  const created = await manager.manage("new", { path: path.join(root, "受保护资料库") });
+  await manager.writeLibrary({
+    inspirations: [{ id: "I000001", title: "必须保留" }],
+    projects: [],
+    archive: [],
+    activeProject: null,
+  }, created.storage.sessionId);
+  const indexPath = path.join(created.storage.libraryDir, "library.json");
+  const hiddenPath = `${indexPath}.temporarily-unavailable`;
+  await fs.rename(indexPath, hiddenPath);
+  await assert.rejects(
+    manager.readLibrary(),
+    (error) => error.statusCode === 503 && error.code === "LIBRARY_INDEX_UNAVAILABLE",
+  );
+  assert.equal(await fs.stat(indexPath).catch(() => null), null);
+  assert.equal(JSON.parse(await fs.readFile(hiddenPath, "utf8")).inspirations[0].title, "必须保留");
+});
+
+test("a second computer opens the same library read-only until the writer releases its lease", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-library-writer-lease-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const first = createLibraryManager({ initialLibraryDir: null });
+  const second = createLibraryManager({ initialLibraryDir: null });
+  t.after(() => first.dispose());
+  t.after(() => second.dispose());
+  const created = await first.manage("new", { path: path.join(root, "团队资料库") });
+  const opened = await second.manage("open", { path: created.storage.libraryDir });
+  assert.equal(created.storage.mode, "read_write");
+  assert.equal(opened.storage.mode, "read_only");
+  await assert.rejects(
+    second.writeLibrary({ inspirations: [{ id: "I000099" }] }, opened.storage.sessionId),
+    (error) => error.statusCode === 423 && error.code === "LIBRARY_WRITE_LOCKED",
+  );
+  await first.manage("close", { sessionId: created.storage.sessionId });
+  const saved = await second.writeLibrary({ inspirations: [{ id: "I000099" }] }, opened.storage.sessionId);
+  assert.equal(saved.inspirations[0].id, "I000099");
+  assert.equal(saved.storage.mode, "read_write");
+});
+
+test("concurrent writes from the same app share one library lease heartbeat", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-library-heartbeat-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const lease = createLibraryWriteLease();
+  t.after(() => lease.release());
+
+  await lease.configure(root);
+  const states = await Promise.all(Array.from({ length: 64 }, () => lease.ensureOwned()));
+  assert.equal(states.every((state) => state.owned && state.mode === "read_write"), true);
+
+  const metadataEntries = await fs.readdir(path.join(root, "metadata"));
+  assert.deepEqual(metadataEntries.filter((name) => name.endsWith(".tmp")), []);
 });
 
 test("content ids are monotonic across indexed, abandoned and on-disk units", async (t) => {

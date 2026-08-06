@@ -1,9 +1,28 @@
 const INSPIRATION_ID_PATTERN = /^I\d{6,}$/;
 
+export const inspirationSortOptions = Object.freeze([
+  { value: "collected_desc", label: "最近收集" },
+  { value: "collected_asc", label: "最早收集" },
+  { value: "published_desc", label: "最新发布" },
+  { value: "likes_desc", label: "点赞最高" },
+  { value: "favorites_desc", label: "收藏最高" },
+  { value: "recently_referenced", label: "最近用于创作" },
+]);
+
+const ATTENTION_CAPTURE_STATES = new Set([
+  "waiting_login",
+  "waiting_verification",
+  "retry_wait",
+  "failed",
+  "blocked",
+  "unsupported",
+  "content_unavailable",
+]);
+
 export const platformTone = {
   抖音: "black",
   小红书: "red",
-  Bilibili: "blue",
+  B站: "blue",
   视频号: "green",
   YouTube: "red",
   Instagram: "violet",
@@ -31,6 +50,87 @@ function nextId(items, prefix) {
 
 function normalizeComparableText(value = "") {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function timestamp(value) {
+  if (!value) return 0;
+  // Legacy cards use `YYYY.MM.DD HH:mm`; newly ingested cards use ISO-8601
+  // timestamps whose milliseconds also contain a dot. Only normalize the date
+  // separators, never the ISO milliseconds part (for example `.783Z`).
+  const normalized = String(value).trim().replace(
+    /^(\d{4})[./](\d{1,2})[./](\d{1,2})(?=$|[T\s])/,
+    "$1-$2-$3",
+  );
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function contentIdNumber(item = {}) {
+  return Number(String(item.id || "").match(/^I(\d+)$/)?.[1]) || Number.MAX_SAFE_INTEGER;
+}
+
+function metricNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const raw = String(value ?? "").trim().replaceAll(",", "");
+  if (!raw) return 0;
+  const match = raw.match(/^([\d.]+)\s*([万亿kKmM])?$/);
+  if (!match) return Number(raw) || 0;
+  const base = Number(match[1]) || 0;
+  const multiplier = ({ 万: 10_000, 亿: 100_000_000, k: 1_000, K: 1_000, m: 1_000_000, M: 1_000_000 })[match[2]] || 1;
+  return base * multiplier;
+}
+
+function collectedTimestamp(item = {}) {
+  return timestamp(item.capturedAt || item.createdAt || item.intake?.createdAt || item.updatedAt);
+}
+
+function publishedTimestamp(item = {}) {
+  return timestamp(item.publishedAt || item.source?.publishedAt);
+}
+
+function compareNewest(left, right, getTimestamp) {
+  const a = getTimestamp(left);
+  const b = getTimestamp(right);
+  if (a !== b) return b - a;
+  return contentIdNumber(left) - contentIdNumber(right);
+}
+
+export function requiresInspirationAttention(item = {}) {
+  const captureState = item.refreshState && item.refreshState !== "success"
+    ? item.refreshState
+    : item.parseState;
+  if (ATTENTION_CAPTURE_STATES.has(captureState)) return true;
+  if (item.mediaAvailability === "missing") return true;
+  const hasLocalVideo = String(item.videoLocalPath || "").startsWith("/library-assets/");
+  return hasLocalVideo && !String(item.transcript || "").trim() && Boolean(item.transcriptState || hasLocalVideo);
+}
+
+export function sortInspirationItems(items = [], {
+  sort = "collected_desc",
+  linkedInspirationIds = new Set(),
+} = {}) {
+  const linked = linkedInspirationIds instanceof Set ? linkedInspirationIds : new Set(linkedInspirationIds || []);
+  return [...items].sort((left, right) => {
+    if (sort === "collected_asc") {
+      const a = collectedTimestamp(left);
+      const b = collectedTimestamp(right);
+      if (a !== b) return a - b;
+      return contentIdNumber(left) - contentIdNumber(right);
+    }
+    if (sort === "published_desc") return compareNewest(left, right, publishedTimestamp);
+    if (sort === "likes_desc" || sort === "favorites_desc") {
+      const key = sort === "likes_desc" ? "likes" : "favorites";
+      const difference = metricNumber(right.stats?.[key]) - metricNumber(left.stats?.[key]);
+      return difference || compareNewest(left, right, collectedTimestamp);
+    }
+    if (sort === "recently_referenced") {
+      const leftLinked = linked.has(left.id);
+      const rightLinked = linked.has(right.id);
+      if (leftLinked !== rightLinked) return leftLinked ? -1 : 1;
+      return compareNewest(left, right, (item) => timestamp(item.referenceUpdatedAt || item.updatedAt || item.capturedAt));
+    }
+    return compareNewest(left, right, collectedTimestamp);
+  });
 }
 
 function referenceContentId(reference) {
@@ -69,11 +169,23 @@ export function detectPlatform(value) {
   const text = String(value || "").toLowerCase();
   if (text.includes("douyin.com") || text.includes("iesdouyin.com")) return "抖音";
   if (text.includes("xiaohongshu.com") || text.includes("xhslink.com") || text.includes("xhslink.cn")) return "小红书";
-  if (text.includes("bilibili.com") || text.includes("b23.tv")) return "Bilibili";
-  if (text.includes("channels.weixin.qq.com")) return "视频号";
+  if (text.includes("bilibili.com") || text.includes("b23.tv") || text.includes("bili2233.cn")) return "B站";
+  if (text.includes("channels.weixin.qq.com") || text.includes("weixin.qq.com")) return "视频号";
   if (text.includes("youtube.com") || text.includes("youtu.be")) return "YouTube";
   if (text.includes("instagram.com")) return "Instagram";
   return "未识别";
+}
+
+export function platformAuthKey(value) {
+  const label = String(value || "");
+  return ({
+    抖音: "douyin",
+    小红书: "xiaohongshu",
+    B站: "bilibili",
+    视频号: "wechat-channels",
+    YouTube: "youtube",
+    Instagram: "instagram",
+  })[label] || "";
 }
 
 export function formatMetric(value) {
@@ -114,8 +226,15 @@ export function makeInspiration(url, category, existing) {
     originalUrl: url.trim(),
     platform,
     author: "",
+    authorId: "",
+    authorUrl: "",
     title: `待整理：${platform} 链接`,
     body: "",
+    transcript: "",
+    transcriptSource: "",
+    transcriptState: "",
+    transcriptStatus: "",
+    transcriptError: "",
     category: category || "",
     categoryAssignedByUser: Boolean(category),
     capturedAt: formatNow(),
@@ -223,7 +342,14 @@ export function applyExtraction(card, extraction) {
     platformItemId: extraction.platformItemId || card.platformItemId,
     title: extraction.title && isPlaceholderTitle ? extraction.title : card.title,
     body: visibleBodyText(card) || extractionBody || "",
+    transcript: extraction.transcript || card.transcript || "",
+    transcriptSource: extraction.transcriptSource || card.transcriptSource || "",
+    transcriptState: extraction.transcriptState || card.transcriptState || "",
+    transcriptStatus: extraction.transcriptStatus || card.transcriptStatus || "",
+    transcriptError: extraction.transcriptError || "",
     author: extraction.author && !card.author ? extraction.author : card.author,
+    authorId: extraction.authorId || card.authorId || "",
+    authorUrl: extraction.authorUrl || card.authorUrl || "",
     contentType: extraction.contentType || card.contentType || "",
     images: extraction.images?.length ? extraction.images : (card.images || []),
     coverUrl: extraction.coverUrl || card.coverUrl,
@@ -234,6 +360,8 @@ export function applyExtraction(card, extraction) {
     publishedAt: extraction.publishedAt || card.publishedAt,
     duration: extraction.duration || card.duration || "",
     stats: {
+      ...(card.stats || {}),
+      ...(extraction.stats || {}),
       likes: extraction.stats?.likes || card.stats?.likes || "",
       favorites: extraction.stats?.favorites || card.stats?.favorites || "",
       comments: extraction.stats?.comments || card.stats?.comments || "",
@@ -264,6 +392,9 @@ export function applyExtraction(card, extraction) {
     source: {
       platform: extraction.platform || card.platform || "",
       originalUrl: card.originalUrl || "",
+      platformItemId: extraction.platformItemId || card.platformItemId || "",
+      accountId: extraction.authorId || card.authorId || "",
+      accountUrl: extraction.authorUrl || card.authorUrl || "",
       accountName: extraction.author || card.author || "",
       publishedAt: extraction.publishedAt || card.publishedAt || "",
     },

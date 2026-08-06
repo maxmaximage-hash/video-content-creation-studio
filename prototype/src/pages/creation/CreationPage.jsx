@@ -374,12 +374,12 @@ function ClearProjectModal({ onClose, onConfirm }) {
   return (
     <CreationModal
       title="清空当前画板？"
-      description="只清空当前草稿中的文字、分类和素材引用。已经保存到资料库的真实文件不会被删除。"
+      description="这会彻底删除当前草稿、文字、封面、原素材、成品视频及资料库中的对应文件，无法恢复。"
       onClose={onClose}
     >
       <div className="creation-dialog-summary">
         <Trash2 size={20} />
-        <p>当前 content-id 会继续保留，之后仍可在同一空画板上创作。</p>
+        <p>当前 content-id 不会保留；删除完成后会创建一个全新空画板。</p>
       </div>
       <div className="modal-footer">
         <button type="button" className="quiet-button" onClick={onClose}>取消</button>
@@ -399,7 +399,7 @@ function NewProjectModal({ onClose, onDiscard, onQueue }) {
       <div className="creation-new-actions">
         <button type="button" className="creation-choice-danger" onClick={onDiscard}>
           <span><Trash2 size={18} /></span>
-          <div><strong>删除 / 放弃当前草稿</strong><p>解除当前草稿引用，不删除资料库中的真实媒体文件。</p></div>
+          <div><strong>删除 / 放弃当前草稿</strong><p>彻底删除这个 content-id 及其全部真实文件，然后打开新画板。</p></div>
         </button>
         <button type="button" onClick={onQueue}>
           <span><Inbox size={18} /></span>

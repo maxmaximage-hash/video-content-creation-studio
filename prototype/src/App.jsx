@@ -55,6 +55,7 @@ import {
 
 const defaultCategories = [];
 const legacyPresetCategories = new Set(["情感", "展示面", "认知", "教程"]);
+const appBuildLabel = `v${__APP_VERSION__} · ${__APP_COMMIT__}${__APP_DIRTY__ ? " · 未提交" : ""}`;
 
 const navItems = [
   { id: "inspirations", label: "灵感库", icon: Lightbulb },
@@ -451,7 +452,12 @@ function AppSidebar({ page, setPage, queueCount, archivedCount, open, setOpen, s
             </div>
           )}
         </div>
-        <span className="prototype-label">内容工作台 · 本地资料库</span>
+        <span
+          className={`prototype-label build-label${__APP_DIRTY__ ? " is-dirty" : ""}`}
+          title={`视频内容创作中台 ${appBuildLabel}`}
+        >
+          {appBuildLabel}
+        </span>
       </div>
     </aside>
   );
@@ -836,8 +842,9 @@ export function App() {
       activeProject: nextActiveProject,
     }));
     setLibraryLoaded(true);
-    setLibraryWritable(true);
-    setSaveState("saved");
+    const writable = library.storage?.mode !== "read_only";
+    setLibraryWritable(writable);
+    setSaveState(writable ? "saved" : "readonly");
   };
 
   const refreshAuthStatus = async (probe = false, platform = "") => {
@@ -969,6 +976,32 @@ export function App() {
     }
   };
 
+  const hardDeleteContent = async (id) => {
+    window.clearTimeout(autosaveTimerRef.current);
+    try {
+      const response = await fetch(`/api/content/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: {
+          "x-library-session-id": storage?.sessionId || "",
+          "x-library-revision": String(libraryRevisionRef.current),
+        },
+      });
+      const result = await response.json();
+      if (!response.ok || result.error) {
+        const error = new Error(result.error || "删除失败");
+        error.status = response.status;
+        error.data = result;
+        throw error;
+      }
+      if (result.library) applyLibraryData(result.library);
+      return result;
+    } catch (error) {
+      if ([409, 423].includes(error.status) && error.data?.library) applyLibraryData(error.data.library);
+      notify(`删除失败：${error.message}`);
+      return null;
+    }
+  };
+
   const deleteInspiration = async (id) => {
     if (deletingInspirationIdsRef.current.has(id)) return false;
     window.clearTimeout(autosaveTimerRef.current);
@@ -977,21 +1010,7 @@ export function App() {
     deletingInspirationIdsRef.current = nextDeletingIds;
     setDeletingInspirationIds(nextDeletingIds);
     try {
-      const response = await fetch(`/api/inspirations/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-        headers: {
-          "x-library-session-id": storage?.sessionId || "",
-        },
-      });
-      const result = await response.json();
-      if (!response.ok || result.error) {
-        throw new Error(result.error || "删除失败");
-      }
-      if (result.library) applyLibraryData(result.library);
-      return true;
-    } catch (error) {
-      notify(`删除未提交：${error.message}`);
-      return false;
+      return Boolean(await hardDeleteContent(id));
     } finally {
       setDeletingInspirationIds((current) => {
         const next = new Set(current);
@@ -1147,10 +1166,14 @@ export function App() {
     }
     creatingProjectRef.current = true;
     try {
-      const id = await allocateProjectId();
       if (replaceProjectId) {
         abandonedProjectIdsRef.current.add(replaceProjectId);
         projectRevisionRef.current.set(replaceProjectId, (projectRevisionRef.current.get(replaceProjectId) || 0) + 1);
+        const deleted = await hardDeleteContent(replaceProjectId);
+        if (!deleted) return null;
+      }
+      const id = await allocateProjectId();
+      if (replaceProjectId) {
         setMediaUploads((current) => {
           const next = { ...current };
           delete next[replaceProjectId];
@@ -1247,24 +1270,20 @@ export function App() {
     }
   };
 
-  const clearActiveProject = (projectId) => {
+  const clearActiveProject = async (projectId) => {
     projectRevisionRef.current.set(projectId, (projectRevisionRef.current.get(projectId) || 0) + 1);
     setMediaUploads((current) => {
       const next = { ...current };
       delete next[projectId];
       return next;
     });
-    const queued = projectsRef.current.some((project) => project.id === projectId);
-    updateProjectById(projectId, (current) => {
-      const cleared = clearProjectContent(current);
-      return queued ? queueProject(cleared) : cleared;
-    });
-    notify("当前画板已清空，资料库中的真实文件仍保留");
+    const project = await createProject({ replaceProjectId: projectId });
+    if (project) notify("原草稿及其真实文件已彻底删除，已打开新画板");
   };
 
   const discardAndCreate = async (projectId) => {
     const project = await createProject({ replaceProjectId: projectId });
-    if (project) notify("已放弃当前草稿并打开新画板，真实媒体文件未删除");
+    if (project) notify("当前草稿及其真实文件已彻底删除，已打开新画板");
   };
 
   const uploadProjectCovers = async (projectId, files) => {
@@ -1460,9 +1479,13 @@ export function App() {
     setPage("creation");
   };
 
-  const deleteQueuedProject = (projectId) => {
+  const deleteQueuedProject = async (projectId) => {
+    const original = projectsRef.current.find((project) => project.id === projectId);
     setProjects((current) => current.filter((project) => project.id !== projectId));
     setEditingProjectId((current) => current === projectId ? null : current);
+    const deleted = await hardDeleteContent(projectId);
+    if (!deleted && original) setProjects((current) => current.some((project) => project.id === projectId) ? current : [original, ...current]);
+    return Boolean(deleted);
   };
 
   const publish = (project) => {

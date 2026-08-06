@@ -249,7 +249,7 @@ test("cover delete control is hidden until hover or keyboard focus and layout st
   }
 });
 
-test("clear is confirmed, keeps the immutable ID, clears every reference, and leaves files untouched", async ({ page, request }) => {
+test("clear is confirmed, permanently deletes the old content unit, and opens a fresh ID", async ({ page, request }) => {
   await seedLibrary(request);
   await openCreation(page);
 
@@ -277,8 +277,9 @@ test("clear is confirmed, keeps the immutable ID, clears every reference, and le
   await expect.poll(async () => {
     const current = await libraryState(request);
     const project = current.activeProject;
+    if (!project) return null;
     return {
-      id: project.id,
+      hasFreshId: project.id !== "C009901",
       title: project.title,
       body: project.body,
       category: project.category,
@@ -290,7 +291,7 @@ test("clear is confirmed, keeps the immutable ID, clears every reference, and le
       duplicateInQueue: current.projects.some((item) => item.id === project.id),
     };
   }).toEqual({
-    id: "C009901",
+    hasFreshId: true,
     title: "",
     body: "",
     category: "",
@@ -301,7 +302,8 @@ test("clear is confirmed, keeps the immutable ID, clears every reference, and le
     completedAt: null,
     duplicateInQueue: false,
   });
-  expect(fs.existsSync(absoluteUploadedPath)).toBe(true);
+  expect(fs.existsSync(absoluteUploadedPath)).toBe(false);
+  expect(fs.existsSync(path.join(library.storage.libraryDir, "content-units", "C009901"))).toBe(false);
 });
 
 test("inspiration entry releases its modal before ID allocation and the first new click handles the reference draft", async ({ page, request }) => {

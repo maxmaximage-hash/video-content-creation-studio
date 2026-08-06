@@ -18,7 +18,7 @@
 - 不复制 Safari、Chrome 或其他浏览器 profile。
 - 不用测试夹具覆盖真实 `library.json`。
 - 不在 Bundle ID 不匹配时覆盖 `/Applications` 中的同名应用。
-- 不把模拟测试通过称为抖音、小红书真实采集成功。
+- 不把模拟测试通过称为任何平台的真实采集成功。
 
 ## 1. 预检
 
@@ -56,6 +56,8 @@ git remote -v
 
 升级已有克隆时，先检查工作区。存在用户修改时不得执行会覆盖修改的 reset、checkout 或 clean。
 
+默认安装 `main`，因为它只保存已经完成真实应用验收的稳定版本。除非用户明确指定开发分支或 commit，不要自行安装 `codex/*-workbench`。
+
 ## 3. 安装依赖
 
 ```bash
@@ -64,7 +66,7 @@ npm ci
 npx playwright install chromium
 ```
 
-不要创建包含真实凭证的 `.env`。当前版本不需要 API Key。
+不要创建包含真实凭证的 `.env`。平台采集不需要 API Key；腾讯云转写是可选功能，必须由用户在安装应用的界面中配置，密钥只允许进入 macOS 钥匙串。
 
 ## 4. 防回退验证
 
@@ -102,6 +104,14 @@ codesign --verify --deep --strict '/Applications/视频内容创作中台.app'
 mdfind 'kMDItemCFBundleIdentifier == "com.yinli.video-content-creation-studio"'
 ```
 
+同时记录源码版本：
+
+```bash
+npm run version:status
+```
+
+应用导航栏右侧的版本、commit 应与命令输出一致；正式稳定版不应显示“未提交”。
+
 `mdfind` 应只返回一个可启动应用。如果发现旧副本，先核对 Bundle ID 和路径，再向用户报告；不要未经确认删除用户其他项目。
 
 ## 6. 首次启动
@@ -120,7 +130,7 @@ open '/Applications/视频内容创作中台.app'
 
 ## 7. 平台登录
 
-在灵感库中分别打开抖音和小红书专用登录窗口。登录由用户手动完成：
+在灵感库中为用户需要的平台打开对应专用登录窗口。登录由用户手动完成：
 
 - 不自动填写账号密码。
 - 不绕过验证码或平台风控。
@@ -129,7 +139,7 @@ open '/Applications/视频内容创作中台.app'
 
 ## 8. 真实应用验收
 
-必须在 `/Applications/视频内容创作中台.app` 中完成。让用户提供自己有权访问的真实抖音和小红书链接，然后分别验证：
+必须在 `/Applications/视频内容创作中台.app` 中完成。让用户提供自己有权访问的真实作品与主页链接，只对本版本实际涉及的平台分别验证：
 
 1. 链接只生成一个灵感 ID，不重复建卡。
 2. 标题、正文、作者、互动数据和媒体与目标作品一致。
@@ -137,6 +147,8 @@ open '/Applications/视频内容创作中台.app'
 4. 刷新或重启后卡片和本地媒体仍存在。
 5. 从灵感新建创作可以进入创作页。
 6. 删除专用测试卡后，索引和该内容单元同时消失。
+7. 多条链接不重复建卡，主页扫描能在中断后从原任务继续。
+8. 有平台字幕时直接使用；否则腾讯云免费额度优先，不可用时本地转写，卡片可展开和复制逐字稿。
 
 不要使用用户已有的重要内容做删除验收。
 
@@ -146,6 +158,7 @@ open '/Applications/视频内容创作中台.app'
 
 ```text
 源码目录：
+版本：
 Git commit：
 应用路径：/Applications/视频内容创作中台.app
 Bundle ID：com.yinli.video-content-creation-studio

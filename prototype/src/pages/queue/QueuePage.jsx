@@ -949,12 +949,12 @@ export function QueuePage({
 
   const deleteProject = (project) => {
     const title = project.title || "未命名创作";
-    const confirmed = window.confirm(`确定从待发布删除「${title}」吗？\n源灵感、本地封面和视频素材文件不会被删除。`);
+    const confirmed = window.confirm(`确定彻底删除「${title}」吗？\n这条内容的文字、封面、原素材、成品视频和资料库文件都会立即删除，无法恢复。`);
     if (!confirmed) return;
     onDeleteProject(project.id);
     setExpanded((current) => current === project.id ? null : current);
     setPreviewCover(null);
-    notify("已从待发布删除");
+    notify("正在彻底删除");
   };
 
   const chooseCovers = (projectId) => {

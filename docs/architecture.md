@@ -12,6 +12,8 @@ React 前端
   -> /api/library
   -> /api/inspirations/*
   -> /api/extract
+  -> /api/profile-scans
+  -> /api/transcription/*
   -> /api/covers
   -> /api/project-media
   -> /api/project-actions
@@ -19,8 +21,10 @@ React 前端
 服务端
   -> Library Manager
   -> 平台适配器
+  -> 主页扫描与可恢复批量任务
   -> 独立登录会话
   -> 采集调度与质量门禁
+  -> 平台字幕 / 腾讯云免费额度 / 本地 Whisper
   -> 本地媒体安全写入
 ```
 
@@ -63,6 +67,8 @@ prototype/
 - `blogger`：博主号。
 - `ip`：IP 号。
 
+逐字稿是内容单元的文本字段，同步保存到 `copy/transcript.txt`；`transcriptSource` 记录 `platform_caption`、`tencent_asr` 或 `local_whisper`。
+
 ## 索引关系
 
 `library.json` 保存页面投影和 v2 关系集合：
@@ -73,6 +79,7 @@ prototype/
 - `contentRelations`：创作引用灵感等关系。
 - `metricsSnapshots`：互动数据时间快照。
 - `duplicateGroups`：同一平台来源的重复候选。
+- `captureBatches`：主页扫描任务、候选 URL 与续跑检查点。
 
 每个 `content-units/<ID>/manifest.json` 同时保存该内容单元可独立解释的元数据和相对路径。
 

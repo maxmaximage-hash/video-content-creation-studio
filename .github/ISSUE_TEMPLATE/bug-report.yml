@@ -10,7 +10,7 @@ body:
     id: version
     attributes:
       label: Version or commit
-      placeholder: 0.1.0 / git commit
+      placeholder: v0.2.0 / 2db004a502
     validations:
       required: true
   - type: input
