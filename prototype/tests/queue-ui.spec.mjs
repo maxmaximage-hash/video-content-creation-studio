@@ -189,6 +189,79 @@ test.afterEach(async ({ page }) => {
   expect(browserErrors.get(page) || []).toEqual([]);
 });
 
+test("内容库空态和页头都能新建内容并自动保存", async ({ page, request }) => {
+  const response = await request.post("/api/library", {
+    data: {
+      categories: ["情感", "展示面", "认知", "教程"],
+      userDefinedCategories: ["情感", "展示面", "认知", "教程"],
+      inspirations: [],
+      projects: [],
+      archive: [],
+      activeProject: null,
+      contentIdCounters: { I: 0, C: 0 },
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "内容库", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "内容库", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "新建内容", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "新建第一条内容", exact: true }).click();
+
+  const firstCard = page.locator("[data-project-id]").first();
+  await expect(firstCard).toBeVisible();
+  const firstId = await firstCard.getAttribute("data-project-id");
+  expect(firstId).toMatch(/^C\d{6}$/);
+  await expect.poll(() => order(page)).toEqual([firstId]);
+  await expect(firstCard.locator('[data-account-role="blogger"]')).toBeVisible();
+  await expect(firstCard.locator('[data-account-role="ip"]')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe("博主号标题");
+
+  await firstCard.getByLabel("博主号标题").fill("新建内容验收");
+  await expect.poll(async () => {
+    const library = await (await request.get("/api/library")).json();
+    const created = library.projects.find((project) => project.id === firstId);
+    return {
+      firstId: library.projects[0]?.id,
+      title: created?.title,
+      bloggerTitle: created?.accountVariants?.blogger?.title,
+      stage: created?.workflow?.stage,
+    };
+  }).toEqual({
+    firstId,
+    title: "新建内容验收",
+    bloggerTitle: "新建内容验收",
+    stage: "ready_to_publish",
+  });
+
+  await page.reload();
+  await page.getByRole("button", { name: "内容库", exact: true }).click();
+  await expect(page.locator(`[data-project-id="${firstId}"]`).getByLabel("博主号标题")).toHaveValue("新建内容验收");
+
+  await page.setViewportSize({ width: 390, height: 780 });
+  const headerCreate = page.getByRole("button", { name: "新建内容", exact: true });
+  await expect(headerCreate).toBeVisible();
+  const headerMetrics = await page.locator(".queue-header-actions").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: Math.floor(rect.left),
+      right: Math.ceil(rect.right),
+      viewportWidth: window.innerWidth,
+    };
+  });
+  expect(headerMetrics.left).toBeGreaterThanOrEqual(0);
+  expect(headerMetrics.right).toBeLessThanOrEqual(headerMetrics.viewportWidth);
+
+  await headerCreate.click();
+  await expect(page.locator("[data-project-id]")).toHaveCount(2);
+  const secondId = await page.locator("[data-project-id]").first().getAttribute("data-project-id");
+  expect(secondId).toMatch(/^C\d{6}$/);
+  expect(secondId).not.toBe(firstId);
+  await expect.poll(() => order(page)).toEqual([secondId, firstId]);
+  await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe("博主号标题");
+});
+
 test("card hierarchy, editable copy, large cover surfaces and button isolation", async ({ page, request }) => {
   await openQueue(page);
 

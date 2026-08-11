@@ -73,7 +73,7 @@ function QueueIconButton({ label, children, className = "", onClick, disabled = 
   );
 }
 
-function QueueHeader({ completedCount, setSidebarOpen }) {
+function QueueHeader({ completedCount, creatingContent, onCreateContent, setSidebarOpen }) {
   return (
     <header className="page-header">
       <div className="title-row">
@@ -86,7 +86,13 @@ function QueueHeader({ completedCount, setSidebarOpen }) {
           <p>一个选题同时维护博主号与 IP 号两版内容，序号代表当前整理优先级。</p>
         </div>
       </div>
-      <div className="header-actions"><span className="status-pill tone-green">{completedCount} 个创作已完成</span></div>
+      <div className="header-actions queue-header-actions">
+        <button type="button" className="primary-button queue-create-button" onClick={onCreateContent} disabled={creatingContent}>
+          {creatingContent ? <RefreshCw size={16} className="spin" /> : <Plus size={16} />}
+          {creatingContent ? "正在新建" : "新建内容"}
+        </button>
+        <span className="status-pill tone-green">{completedCount} 个创作已完成</span>
+      </div>
     </header>
   );
 }
@@ -942,6 +948,7 @@ export function QueuePage({
   categories,
   mediaUploads,
   notify,
+  onCreateContent,
   onDeleteProject,
   onUpdateProject,
   onUploadCovers,
@@ -953,6 +960,8 @@ export function QueuePage({
 }) {
   const [expanded, setExpanded] = useState(null);
   const [activeId, setActiveId] = useState(null);
+  const [creatingContent, setCreatingContent] = useState(false);
+  const [newProjectId, setNewProjectId] = useState("");
   const [previewCover, setPreviewCover] = useState(null);
   const [uploadingProjectId, setUploadingProjectId] = useState(null);
   const [statusFilter, setStatusFilter] = useState("全部");
@@ -968,6 +977,33 @@ export function QueuePage({
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+
+  useEffect(() => {
+    if (!newProjectId || !projects.some((project) => project.id === newProjectId)) return;
+    const frame = window.requestAnimationFrame(() => {
+      const input = document.querySelector(`[data-project-id="${newProjectId}"] textarea[aria-label="博主号标题"]`);
+      if (!(input instanceof HTMLTextAreaElement)) return;
+      input.scrollIntoView({ behavior: "smooth", block: "center" });
+      input.focus({ preventScroll: true });
+      input.select();
+      setNewProjectId("");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [newProjectId, projects]);
+
+  const createContent = async () => {
+    if (creatingContent || !onCreateContent) return;
+    setCreatingContent(true);
+    try {
+      const project = await onCreateContent();
+      if (project?.id) {
+        setStatusFilter("全部");
+        setNewProjectId(project.id);
+      }
+    } finally {
+      setCreatingContent(false);
+    }
+  };
 
   const statusSignature = useMemo(() => JSON.stringify(projects.map((project) => ({
     id: project.id,
@@ -1147,7 +1183,12 @@ export function QueuePage({
         setExpanded(null);
       }}
     >
-      <QueueHeader completedCount={completedCount} setSidebarOpen={setSidebarOpen} />
+      <QueueHeader
+        completedCount={completedCount}
+        creatingContent={creatingContent}
+        onCreateContent={createContent}
+        setSidebarOpen={setSidebarOpen}
+      />
       <div className="toolbar-row queue-toolbar">
         <div className="segmented-control" aria-label="创作状态筛选">
           {[
@@ -1231,6 +1272,12 @@ export function QueuePage({
           <div className="empty-icon"><Plus size={20} /></div>
           <h2>{projects.length ? "这个状态下没有内容" : "内容库为空"}</h2>
           <p>{projects.length ? "切换上方状态查看其他内容。" : "从灵感卡片点“创作”，保存后会进入这里沉淀和整理。"}</p>
+          {!projects.length && (
+            <button type="button" className="primary-button queue-empty-create" onClick={createContent} disabled={creatingContent}>
+              {creatingContent ? <RefreshCw size={16} className="spin" /> : <Plus size={16} />}
+              {creatingContent ? "正在新建" : "新建第一条内容"}
+            </button>
+          )}
         </div>
       )}
 

@@ -3,6 +3,19 @@
   gap: 18px;
 }
 
+.queue-phase1 .queue-header-actions {
+  gap: 10px;
+}
+
+.queue-phase1 .queue-create-button {
+  min-height: 40px;
+  padding-inline: 16px;
+}
+
+.queue-phase1 .queue-empty-create {
+  margin-top: 18px;
+}
+
 .queue-phase1 .queue-card {
   min-height: 306px;
   position: relative;
@@ -1198,6 +1211,12 @@
 }
 
 @media (max-width: 680px) {
+  .queue-phase1 .queue-header-actions {
+    width: 100%;
+    padding: 0 0 0 44px;
+    justify-content: flex-start;
+  }
+
   .queue-phase1 .queue-card {
     padding: 18px 14px;
   }

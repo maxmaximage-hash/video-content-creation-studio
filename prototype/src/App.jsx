@@ -1181,6 +1181,29 @@ export function App() {
     if (project) notify(`已新建 ${project.id}`);
   };
 
+  const createContentIndex = async () => {
+    if (creatingProjectRef.current) {
+      notify("正在新建内容，请稍候");
+      return null;
+    }
+    creatingProjectRef.current = true;
+    try {
+      const id = await allocateProjectId();
+      const project = queueProject(makeOriginalProject({
+        id,
+        createdAt: formatNow(),
+      }));
+      setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
+      notify(`已新建 ${project.id}，可以直接填写内容`);
+      return project;
+    } catch (error) {
+      notify(error.message || "新建内容失败");
+      return null;
+    } finally {
+      creatingProjectRef.current = false;
+    }
+  };
+
   const addToExisting = (project, inspiration) => {
     setProjects((current) => current.map((item) => item.id === project.id && !item.references.some((ref) => ref.id === inspiration.id) ? { ...item, references: [...item.references, inspiration], modified: "刚刚" } : item));
   };
@@ -1517,6 +1540,7 @@ export function App() {
         categories={categories}
         mediaUploads={mediaUploads}
         notify={notify}
+        onCreateContent={createContentIndex}
         onEdit={editProject}
         onDeleteProject={deleteQueuedProject}
         onUpdateProject={updateProjectById}
