@@ -37,7 +37,7 @@ import {
   stripContentFromLibrary,
 } from "./server/library-hard-delete.mjs";
 import { createTranscriptionService } from "./server/transcription-service.mjs";
-import { removeProjectIndex } from "./server/project-index.mjs";
+import { createProjectIndex, removeProjectIndex } from "./server/project-index.mjs";
 import {
   isPathInside,
   validateContentId,
@@ -3190,6 +3190,23 @@ function installLibraryApi(server, libraryManager, options = {}) {
         try {
           if (req.url.startsWith("/api/projects/")) {
             const requestUrl = new URL(req.url, "http://local");
+            if (requestUrl.pathname === "/api/projects/index") {
+              if (req.method !== "POST") {
+                res.statusCode = 405;
+                res.end(JSON.stringify({ error: "Method not allowed" }));
+                return;
+              }
+              const payload = await readJsonBody(req);
+              const result = await createProjectIndex({
+                project: payload.project,
+                sessionId: req.headers["x-library-session-id"] || "",
+                expectedRevision: req.headers["x-library-revision"] || "",
+                libraryManager,
+              });
+              res.statusCode = 201;
+              res.end(JSON.stringify(result));
+              return;
+            }
             const match = requestUrl.pathname.match(/^\/api\/projects\/([^/]+)\/index$/);
             if (!match) {
               res.statusCode = 404;

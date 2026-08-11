@@ -907,9 +907,9 @@ export function App() {
           setSaveState("saved");
         })
         .catch((error) => {
-          if (error.status === 409 && error.data?.library) {
-            applyLibraryData(error.data.library);
-            notify("资料库内容已更新，已载入最新版本");
+          if (error.status === 409) {
+            setSaveState("error");
+            notify("检测到资料库版本冲突，当前页面内容已保留，请重试保存");
             return;
           }
           setSaveState("error");
@@ -1033,6 +1033,40 @@ export function App() {
     archiveItems,
     activeProject,
   });
+
+  const persistCurrentLibrary = async () => {
+    window.clearTimeout(autosaveTimerRef.current);
+    if (saveInFlightRef.current) await saveInFlightRef.current;
+    const payload = currentLibraryPayload();
+    const snapshot = stableLibrarySnapshot(payload);
+    if (snapshot === lastSavedSnapshotRef.current) return { payload, snapshot };
+    setSaveState("saving");
+    const response = await fetch("/api/library", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-library-session-id": storage?.sessionId || "",
+        "x-library-revision": String(libraryRevisionRef.current),
+      },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok || result.error) {
+      const error = new Error(result.error || "保存失败");
+      error.status = response.status;
+      error.data = result;
+      setSaveState("error");
+      throw error;
+    }
+    if (result.storage) setStorage(result.storage);
+    if (result.revision) {
+      libraryRevisionRef.current = result.revision;
+      setLibraryRevision(result.revision);
+    }
+    lastSavedSnapshotRef.current = snapshot;
+    setSaveState("saved");
+    return { payload, snapshot };
+  };
 
   const executeLibraryAction = async (action, extra = {}) => {
     if (libraryBusy) return;
@@ -1188,12 +1222,40 @@ export function App() {
     }
     creatingProjectRef.current = true;
     try {
-      const id = await allocateProjectId();
-      const project = queueProject(makeOriginalProject({
-        id,
+      const saved = await persistCurrentLibrary();
+      const projectTemplate = queueProject(makeOriginalProject({
+        id: "",
         createdAt: formatNow(),
       }));
-      setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)]);
+      const response = await fetch("/api/projects/index", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-library-session-id": storage?.sessionId || "",
+          "x-library-revision": String(libraryRevisionRef.current),
+        },
+        body: JSON.stringify({ project: projectTemplate }),
+      });
+      const result = await response.json();
+      if (!response.ok || result.error || !result.createdProject) {
+        const error = new Error(result.error || "新建内容失败");
+        error.status = response.status;
+        error.data = result;
+        throw error;
+      }
+      const project = result.createdProject;
+      const nextProjects = [project, ...saved.payload.projects.filter((item) => item.id !== project.id)];
+      if (result.storage) setStorage(result.storage);
+      if (result.revision) {
+        libraryRevisionRef.current = result.revision;
+        setLibraryRevision(result.revision);
+      }
+      lastSavedSnapshotRef.current = stableLibrarySnapshot({
+        ...saved.payload,
+        projects: nextProjects,
+      });
+      setProjects(nextProjects);
+      setSaveState("saved");
       notify(`已新建 ${project.id}，可以直接填写内容`);
       return project;
     } catch (error) {
@@ -1468,11 +1530,8 @@ export function App() {
   };
 
   const deleteQueuedProject = async (projectId) => {
-    const original = projectsRef.current.find((project) => project.id === projectId);
-    setProjects((current) => current.filter((project) => project.id !== projectId));
-    setEditingProjectId((current) => current === projectId ? null : current);
-    window.clearTimeout(autosaveTimerRef.current);
     try {
+      const saved = await persistCurrentLibrary();
       const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/index`, {
         method: "DELETE",
         headers: {
@@ -1481,13 +1540,32 @@ export function App() {
         },
       });
       const result = await response.json();
-      if (!response.ok || result.error) throw new Error(result.error || "删除索引失败");
-      if (result.library) applyLibraryData(result.library);
+      if (!response.ok || result.error) {
+        const error = new Error(result.error || "删除索引失败");
+        error.status = response.status;
+        error.data = result;
+        throw error;
+      }
+      const nextProjects = saved.payload.projects.filter((project) => project.id !== projectId);
+      if (result.storage) setStorage(result.storage);
+      if (result.revision) {
+        libraryRevisionRef.current = result.revision;
+        setLibraryRevision(result.revision);
+      }
+      lastSavedSnapshotRef.current = stableLibrarySnapshot({
+        ...saved.payload,
+        projects: nextProjects,
+      });
+      setProjects(nextProjects);
+      setEditingProjectId((current) => current === projectId ? null : current);
+      setSaveState("saved");
       notify("已删除软件索引，Eagle 文件未受影响");
       return true;
     } catch (error) {
-      if (original) setProjects((current) => current.some((project) => project.id === projectId) ? current : [original, ...current]);
-      notify(error.message || "删除索引失败");
+      const message = error.status === 409
+        ? "删除未执行：资料库版本已变化，当前页面内容保持不变"
+        : error.message || "删除索引失败";
+      notify(message);
       return false;
     }
   };
