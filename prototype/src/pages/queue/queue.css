@@ -307,6 +307,17 @@
   object-fit: initial;
 }
 
+.queue-phase1 .queue-image-placeholder {
+  width: 126px;
+  height: 150px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgba(214, 179, 106, .45);
+  border-radius: 5px;
+  color: #b8a06b;
+  background: rgba(255, 255, 255, .035);
+}
+
 .queue-phase1 .queue-cover-gallery-expanded .queue-cover-item,
 .queue-phase1 .queue-cover-gallery-expanded .queue-cover-add {
   width: max-content;

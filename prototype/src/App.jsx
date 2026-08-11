@@ -796,6 +796,7 @@ export function App() {
   const [libraryBusy, setLibraryBusy] = useState(false);
   const [libraryRevision, setLibraryRevision] = useState(1);
   const [deletingInspirationIds, setDeletingInspirationIds] = useState(() => new Set());
+  const [deletingProjectIds, setDeletingProjectIds] = useState(() => new Set());
   const legacyCategoriesRef = useRef([]);
   const userCategoriesStoredRef = useRef(false);
   const lastSavedSnapshotRef = useRef("");
@@ -807,6 +808,8 @@ export function App() {
   const saveInFlightRef = useRef(null);
   const autosaveTimerRef = useRef(null);
   const deletingInspirationIdsRef = useRef(new Set());
+  const deletingProjectIdsRef = useRef(new Set());
+  const projectDeleteQueueRef = useRef(Promise.resolve());
   const inspirationItemsRef = useRef(inspirationItems);
   const pendingReferencePatchesRef = useRef(new Map());
   const referencePatchTimersRef = useRef(new Map());
@@ -822,6 +825,7 @@ export function App() {
   inspirationItemsRef.current = inspirationItems;
   libraryRevisionRef.current = libraryRevision;
   deletingInspirationIdsRef.current = deletingInspirationIds;
+  deletingProjectIdsRef.current = deletingProjectIds;
   const editingProject = editingProjectId
     ? projects.find((project) => project.id === editingProjectId) || null
     : null;
@@ -845,6 +849,8 @@ export function App() {
       libraryRevisionRef.current = Number(data.revision) || libraryRevisionRef.current;
       setLibraryRevision(libraryRevisionRef.current);
       setDeletingInspirationIds(new Set());
+      deletingProjectIdsRef.current = new Set();
+      setDeletingProjectIds(new Set());
       lastSavedSnapshotRef.current = "";
       setLibraryLoaded(true);
       setLibraryWritable(false);
@@ -884,6 +890,8 @@ export function App() {
     libraryRevisionRef.current = library.revision;
     setLibraryRevision(library.revision);
     setDeletingInspirationIds(new Set());
+    deletingProjectIdsRef.current = new Set();
+    setDeletingProjectIds(new Set());
     lastSavedSnapshotRef.current = stableLibrarySnapshot(librarySavePayload({
       legacyCategories: library.legacyCategories,
       categories: library.categories,
@@ -944,7 +952,7 @@ export function App() {
 
   useEffect(() => {
     if (!libraryLoaded || !libraryWritable) return undefined;
-    if (deletingInspirationIds.size) {
+    if (deletingInspirationIds.size || deletingProjectIds.size) {
       setSaveState("saving");
       return undefined;
     }
@@ -964,7 +972,7 @@ export function App() {
     }
     setSaveState("saving");
     autosaveTimerRef.current = window.setTimeout(() => {
-      if (deletingInspirationIdsRef.current.size || saveInFlightRef.current) return;
+      if (deletingInspirationIdsRef.current.size || deletingProjectIdsRef.current.size || saveInFlightRef.current) return;
       const requestRevision = libraryRevisionRef.current;
       const request = fetch("/api/library", {
         method: "POST",
@@ -1008,7 +1016,7 @@ export function App() {
       saveInFlightRef.current = request;
     }, 360);
     return () => window.clearTimeout(autosaveTimerRef.current);
-  }, [libraryLoaded, libraryWritable, categories, inspirationItems, projects, archiveItems, activeProject, storage?.sessionId, libraryRevision, deletingInspirationIds]);
+  }, [libraryLoaded, libraryWritable, categories, inspirationItems, projects, archiveItems, activeProject, storage?.sessionId, libraryRevision, deletingInspirationIds, deletingProjectIds]);
 
   const openAuth = async (platform) => {
     notify("正在打开专用登录窗口");
@@ -1625,70 +1633,102 @@ export function App() {
     setPage("creation");
   };
 
-  const deleteQueuedProject = async (projectId) => {
-    try {
-      window.clearTimeout(autosaveTimerRef.current);
-      if (saveInFlightRef.current) await saveInFlightRef.current;
-      const localPayload = currentLibraryPayload();
-      const projectPatches = dirtyProjectPatches(
-        lastSavedSnapshotRef.current,
-        localPayload.projects,
-        localPayload.activeProject,
-        projectId,
-      );
-      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/index`, {
-        method: "DELETE",
-        headers: {
-          "content-type": "application/json",
-          "x-library-session-id": storage?.sessionId || "",
-          "x-library-revision": String(libraryRevisionRef.current),
-        },
-        body: JSON.stringify({ projectPatches }),
-      });
-      const result = await response.json();
-      if (!response.ok || result.error) {
-        const error = new Error(result.error || "删除索引失败");
-        error.status = response.status;
-        error.data = result;
-        throw error;
-      }
-      const reconciledById = new Map((result.reconciledProjects || []).map((project) => [project.id, project]));
-      const nextProjects = localPayload.projects
-        .filter((project) => project.id !== projectId)
-        .map((project) => reconciledById.get(project.id) || project);
-      const nextActiveProject = localPayload.activeProject?.id === projectId
-        ? null
-        : (reconciledById.get(localPayload.activeProject?.id) || localPayload.activeProject);
-      const nextPayload = {
-        ...localPayload,
-        projects: nextProjects,
-        activeProject: nextActiveProject,
-      };
-      if (result.storage) setStorage(result.storage);
-      if (result.revision) {
-        libraryRevisionRef.current = result.revision;
-        setLibraryRevision(result.revision);
-      }
-      const savedPayload = savedLibraryPayload(lastSavedSnapshotRef.current);
-      if (savedPayload) {
-        lastSavedSnapshotRef.current = stableLibrarySnapshot({
-          ...savedPayload,
-          projects: (savedPayload.projects || [])
-            .filter((project) => project.id !== projectId)
-            .map((project) => reconciledById.get(project.id) || project),
-          activeProject: reconciledById.get(savedPayload.activeProject?.id) || nextActiveProject,
-        });
-      }
-      setProjects(nextProjects);
-      setActiveProject(nextActiveProject);
-      setEditingProjectId((current) => current === projectId ? null : current);
-      setSaveState("saved");
-      notify("已删除软件索引，Eagle 文件未受影响");
-      return true;
-    } catch (error) {
-      notify(error.message || "删除索引失败");
-      return false;
+  const deleteQueuedProject = (projectId) => {
+    if (deletingProjectIdsRef.current.has(projectId)) return Promise.resolve(false);
+    const removedProject = projectsRef.current.find((project) => project.id === projectId);
+    if (!removedProject) return Promise.resolve(false);
+    const removedIndex = projectsRef.current.findIndex((project) => project.id === projectId);
+    const removedActiveProject = activeProjectRef.current?.id === projectId ? activeProjectRef.current : null;
+    const nextDeletingIds = new Set(deletingProjectIdsRef.current);
+    nextDeletingIds.add(projectId);
+    deletingProjectIdsRef.current = nextDeletingIds;
+    setDeletingProjectIds(nextDeletingIds);
+    window.clearTimeout(autosaveTimerRef.current);
+
+    projectsRef.current = projectsRef.current.filter((project) => project.id !== projectId);
+    setProjects(projectsRef.current);
+    if (removedActiveProject) {
+      activeProjectRef.current = null;
+      setActiveProject(null);
     }
+    setEditingProjectId((current) => current === projectId ? null : current);
+
+    const finishDelete = () => {
+      const next = new Set(deletingProjectIdsRef.current);
+      next.delete(projectId);
+      deletingProjectIdsRef.current = next;
+      setDeletingProjectIds(next);
+    };
+    const commitDelete = async () => {
+      try {
+        const localPayload = librarySavePayload({
+          legacyCategories: legacyCategoriesRef.current,
+          categories,
+          hasUserDefinedCategories: userCategoriesStoredRef.current,
+          inspirationItems: inspirationItemsRef.current,
+          projects: projectsRef.current,
+          archiveItems,
+          activeProject: activeProjectRef.current,
+        });
+        const projectPatches = dirtyProjectPatches(
+          lastSavedSnapshotRef.current,
+          localPayload.projects,
+          localPayload.activeProject,
+          projectId,
+        );
+        const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/index`, {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json",
+            "x-library-session-id": storage?.sessionId || "",
+            "x-library-revision": String(libraryRevisionRef.current),
+          },
+          body: JSON.stringify({ projectPatches }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error) throw new Error(result.error || "删除索引失败");
+        const reconciledById = new Map((result.reconciledProjects || []).map((project) => [project.id, project]));
+        projectsRef.current = projectsRef.current.map((project) => reconciledById.get(project.id) || project);
+        setProjects(projectsRef.current);
+        if (activeProjectRef.current) {
+          activeProjectRef.current = reconciledById.get(activeProjectRef.current.id) || activeProjectRef.current;
+          setActiveProject(activeProjectRef.current);
+        }
+        if (result.storage) setStorage(result.storage);
+        if (result.revision) {
+          libraryRevisionRef.current = result.revision;
+          setLibraryRevision(result.revision);
+        }
+        const savedPayload = savedLibraryPayload(lastSavedSnapshotRef.current);
+        if (savedPayload) {
+          lastSavedSnapshotRef.current = stableLibrarySnapshot({
+            ...savedPayload,
+            projects: (savedPayload.projects || [])
+              .filter((project) => project.id !== projectId)
+              .map((project) => reconciledById.get(project.id) || project),
+            activeProject: reconciledById.get(savedPayload.activeProject?.id) || activeProjectRef.current,
+          });
+        }
+        setSaveState("saved");
+        notify("已删除软件索引，Eagle 文件未受影响");
+        return true;
+      } catch (error) {
+        projectsRef.current = [...projectsRef.current];
+        projectsRef.current.splice(Math.min(removedIndex, projectsRef.current.length), 0, removedProject);
+        setProjects(projectsRef.current);
+        if (removedActiveProject) {
+          activeProjectRef.current = removedActiveProject;
+          setActiveProject(removedActiveProject);
+        }
+        notify(`删除失败，已恢复内容：${error.message || "删除索引失败"}`);
+        return false;
+      } finally {
+        finishDelete();
+      }
+    };
+    const queued = projectDeleteQueueRef.current.then(commitDelete, commitDelete);
+    projectDeleteQueueRef.current = queued.catch(() => {});
+    return queued;
   };
 
   let main;

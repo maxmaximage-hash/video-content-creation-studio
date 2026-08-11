@@ -148,17 +148,22 @@ function QueueTitleEditor({ value, onChange, ariaLabel = "内容标题", placeho
 
 function QueueImage({ src, alt = "", ...props }) {
   const [retryCount, setRetryCount] = useState(0);
+  const [unavailable, setUnavailable] = useState(false);
   const timerRef = useRef(null);
   const localAsset = String(src || "").startsWith("/library-assets/");
   const retrySrc = retryCount && localAsset ? `${src}${src.includes("?") ? "&" : "?"}assetRetry=${retryCount}` : src;
 
   useEffect(() => {
     setRetryCount(0);
+    setUnavailable(false);
     return () => clearTimeout(timerRef.current);
   }, [src]);
 
   const retry = () => {
-    if (!localAsset || retryCount >= 6) return;
+    if (!localAsset || retryCount >= 2) {
+      setUnavailable(true);
+      return;
+    }
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(
       () => setRetryCount((current) => current + 1),
@@ -166,6 +171,9 @@ function QueueImage({ src, alt = "", ...props }) {
     );
   };
 
+  if (!src || unavailable) {
+    return <span className="queue-image-placeholder" role="img" aria-label="封面不可用"><ImagePlus size={22} /></span>;
+  }
   return <img {...props} src={retrySrc} alt={alt} draggable={false} onError={retry} />;
 }
 
@@ -224,13 +232,14 @@ function QueueCoverItem({
   onRemove,
 }) {
   const relativePath = libraryRelativePath(cover);
-  const nativeDraggable = state === "available" && canStartNativeFileDrag(cover);
+  const displayState = state === "missing" && !cover.eagleItemId ? "not_added" : state;
+  const nativeDraggable = displayState === "available" && canStartNativeFileDrag(cover);
   const menuTarget = {
     projectId,
     relativePath,
     scope: "cover",
     label: `封面 ${index + 1}`,
-    state,
+    state: displayState,
   };
 
   return (
@@ -281,7 +290,7 @@ function QueueCoverItem({
       >
         <X size={16} strokeWidth={2.2} />
       </button>
-      {state !== "available" && <span className={`queue-asset-state state-${state}`}>{stateLabel(state)}</span>}
+      {displayState !== "available" && displayState !== "not_added" && <span className={`queue-asset-state state-${displayState}`}>{stateLabel(displayState)}</span>}
     </figure>
   );
 }

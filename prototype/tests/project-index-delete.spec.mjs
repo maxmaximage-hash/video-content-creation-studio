@@ -163,3 +163,118 @@ test("single ID delete preserves external migration fields and local dirty edits
     }),
   ]));
 });
+
+async function seedQueueProjects(request, projects) {
+  const current = await (await request.get("/api/library")).json();
+  const seeded = persistedLibrary(current, {
+    projects,
+    inspirations: [],
+    archive: [],
+    activeProject: null,
+  });
+  const response = await request.post("/api/library", { data: seeded });
+  expect(response.ok()).toBeTruthy();
+}
+
+test("queued project delete disappears immediately while the atomic request is slow", async ({ page, request }) => {
+  await seedQueueProjects(request, [
+    { id: "C001101", title: "慢提交删除目标", body: "", covers: [], mediaAssets: [] },
+    { id: "C001102", title: "仍应保留", body: "", covers: [], mediaAssets: [] },
+  ]);
+  let requests = 0;
+  await page.route("**/api/projects/C001101/index", async (route) => {
+    requests += 1;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ removedProjectId: "C001101", filesPreserved: true, revision: 701, reconciledProjects: [] }),
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "内容库" }).click();
+  const removed = page.locator('[data-project-id="C001101"]');
+  await expect(removed).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await removed.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(removed).toHaveCount(0, { timeout: 500 });
+  await expect(page.locator('[data-project-id="C001102"]')).toBeVisible();
+  await expect.poll(() => requests).toBe(1);
+  await page.waitForTimeout(2100);
+  await expect(page.locator(".toast")).toContainText("已删除软件索引");
+});
+
+test("failed queued delete restores the card instead of leaving a phantom removal", async ({ page, request }) => {
+  await seedQueueProjects(request, [
+    { id: "C001103", title: "失败时恢复", body: "", covers: [], mediaAssets: [] },
+  ]);
+  await page.route("**/api/projects/C001103/index", (route) => route.fulfill({
+    status: 500,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "模拟 NAS 提交失败" }),
+  }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "内容库" }).click();
+  const card = page.locator('[data-project-id="C001103"]');
+  page.once("dialog", (dialog) => dialog.accept());
+  await card.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(card).toHaveCount(0, { timeout: 500 });
+  await expect(card).toBeVisible();
+  await expect(page.locator(".toast")).toContainText("删除失败，已恢复内容");
+});
+
+test("rapid deletes are serialized while both cards disappear immediately", async ({ page, request }) => {
+  await seedQueueProjects(request, [
+    { id: "C001105", title: "先删除", body: "", covers: [], mediaAssets: [] },
+    { id: "C001106", title: "后删除", body: "", covers: [], mediaAssets: [] },
+  ]);
+  const requestOrder = [];
+  let firstComplete = false;
+  let secondStartedAfterFirst = false;
+  await page.route("**/api/projects/*/index", async (route) => {
+    const id = route.request().url().match(/projects\/([^/]+)\/index/)?.[1];
+    requestOrder.push(id);
+    if (id === "C001105") {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      firstComplete = true;
+    } else {
+      secondStartedAfterFirst = firstComplete;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ removedProjectId: id, filesPreserved: true, revision: 710 + requestOrder.length, reconciledProjects: [] }),
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "内容库" }).click();
+  for (const id of ["C001105", "C001106"]) {
+    const card = page.locator(`[data-project-id="${id}"]`);
+    page.once("dialog", (dialog) => dialog.accept());
+    await card.getByRole("button", { name: "删除", exact: true }).click();
+    await expect(card).toHaveCount(0, { timeout: 500 });
+  }
+  await expect.poll(() => requestOrder).toEqual(["C001105", "C001106"]);
+  expect(secondStartedAfterFirst).toBe(true);
+});
+
+test("missing legacy local cover uses a stable placeholder instead of a broken image", async ({ page, request }) => {
+  await seedQueueProjects(request, [{
+    id: "C001104",
+    title: "失效旧封面",
+    body: "",
+    covers: [{
+      id: "legacy-missing-cover",
+      name: "missing.png",
+      src: "/library-assets/content-units/C001104/covers/missing.png",
+      relativePath: "content-units/C001104/covers/missing.png",
+    }],
+    mediaAssets: [],
+  }]);
+  await page.goto("/");
+  await page.getByRole("button", { name: "内容库" }).click();
+  const card = page.locator('[data-project-id="C001104"]');
+  await expect(card.getByRole("img", { name: "封面不可用" })).toBeVisible({ timeout: 5000 });
+  await expect(card.locator(".queue-cover-item img")).toHaveCount(0);
+  await expect(card).not.toContainText("文件缺失");
+});
