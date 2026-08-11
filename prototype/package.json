@@ -46,6 +46,7 @@
       "dist/client/**/*",
       "desktop/**/*",
       "server/**/*",
+      "src/services/eagle-asset-routing.js",
       "vite.config.mjs",
       "package.json",
       "public/app-icon.png"
