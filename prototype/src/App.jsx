@@ -5,10 +5,6 @@ import {
   formatDuration,
   platformTone,
 } from "./features/inspirations/inspiration-model.js";
-import {
-  ArchivePage,
-  createArchiveSnapshot,
-} from "./pages/archive/ArchivePage.jsx";
 import { CreationPage } from "./pages/creation/CreationPage.jsx";
 import { InspirationsPage } from "./pages/inspirations/InspirationsPage.jsx";
 import { QueuePage } from "./pages/queue/QueuePage.jsx";
@@ -33,7 +29,6 @@ import {
   uploadProjectMediaFile,
 } from "./services/project-media.js";
 import {
-  Archive,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -60,23 +55,12 @@ const appBuildLabel = `v${__APP_VERSION__} · ${__APP_COMMIT__}${__APP_DIRTY__ ?
 const navItems = [
   { id: "inspirations", label: "灵感库", icon: Lightbulb },
   { id: "creation", label: "创作", icon: PencilLine },
-  { id: "queue", label: "待发布", icon: Inbox },
-  { id: "archive", label: "归档", icon: Archive },
+  { id: "queue", label: "内容库", icon: Inbox },
 ];
 
 function formatNow() {
   return new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date()).replaceAll("/", ".");
-}
-
-function compactTime() {
-  return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -295,7 +279,7 @@ function CategoryManagerModal({ categories, counts, onAdd, onClose, notify }) {
   };
 
   return (
-    <Modal title="分类管理" description="单层分类会贯穿灵感、创作、待发布与归档。" onClose={onClose}>
+    <Modal title="分类管理" description="单层分类会贯穿灵感、创作与内容库。" onClose={onClose}>
       <div className="category-manager">
         <div className="category-create-row">
           <input
@@ -384,7 +368,7 @@ function ClosedLibraryWorkspace({ busy, onAction }) {
   );
 }
 
-function AppSidebar({ page, setPage, queueCount, archivedCount, open, setOpen, storage, saveState, libraryBusy, onLibraryAction }) {
+function AppSidebar({ page, setPage, queueCount, open, setOpen, storage, saveState, libraryBusy, onLibraryAction }) {
   const [libraryMenuOpen, setLibraryMenuOpen] = useState(false);
   const chooseAction = (action) => {
     setLibraryMenuOpen(false);
@@ -406,7 +390,7 @@ function AppSidebar({ page, setPage, queueCount, archivedCount, open, setOpen, s
       <nav className="main-nav" aria-label="主导航">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const count = item.id === "queue" ? queueCount : item.id === "archive" ? archivedCount : null;
+          const count = item.id === "queue" ? queueCount : null;
           return (
             <button
               type="button"
@@ -686,7 +670,7 @@ function CreationChoiceModal({ item, projects, onClose, onNew, onAdd, notify }) 
       {mode === "choice" ? (
         <div className="choice-list">
           <button type="button" onClick={() => onNew(item)}><span className="choice-icon coral"><Plus size={20} /></span><div><strong>开始新的创作</strong><p>生成新的永久内容 ID，并自动关联这条灵感。</p></div><ChevronRight size={18} /></button>
-          <button type="button" onClick={() => setMode("existing")} disabled={!projects.length}><span className="choice-icon blue"><Inbox size={20} /></span><div><strong>加入已有创作</strong><p>从仍在待发布的项目中选择一个。</p></div><ChevronRight size={18} /></button>
+          <button type="button" onClick={() => setMode("existing")} disabled={!projects.length}><span className="choice-icon blue"><Inbox size={20} /></span><div><strong>加入已有创作</strong><p>从内容库中选择一个选题继续整理。</p></div><ChevronRight size={18} /></button>
         </div>
       ) : (
         <div className="existing-list">
@@ -698,25 +682,6 @@ function CreationChoiceModal({ item, projects, onClose, onNew, onAdd, notify }) 
           ))}
         </div>
       )}
-    </Modal>
-  );
-}
-
-function PublishModal({ project, onClose, onConfirm }) {
-  const primaryCover = primaryProjectCover(project);
-  return (
-    <Modal title="确认发布" description="系统会先冻结发布快照，再等待资料库媒体匹配。" onClose={onClose}>
-      <div className="snapshot-preview">
-        <MediaPreview item={primaryCover || project} compact />
-        <div><small>{project.id}</small><strong>{project.title || "未命名创作"}</strong><p>{project.body || "尚未填写正文"}</p></div>
-      </div>
-      <div className="snapshot-facts">
-        <span><Check size={15} />标题与正文</span><span><Check size={15} />分类：{categoryLabel(project)}</span><span><Check size={15} />{projectCoverCandidates(project).length} 张封面</span><span><Check size={15} />{project.references.length} 条灵感</span>
-      </div>
-      <div className="modal-footer">
-        <button type="button" className="quiet-button" onClick={onClose}>取消</button>
-        <button type="button" className="publish-button" onClick={() => onConfirm(project)}><Check size={16} />发布并进入归档</button>
-      </div>
     </Modal>
   );
 }
@@ -734,7 +699,6 @@ export function App() {
   const [mediaUploads, setMediaUploads] = useState({});
   const [archiveItems, setArchiveItems] = useState([]);
   const [choiceItem, setChoiceItem] = useState(null);
-  const [publishProject, setPublishProject] = useState(null);
   const [toast, setToast] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
@@ -1240,7 +1204,7 @@ export function App() {
     setActiveProject((current) => current?.id === queuedProject.id ? null : current);
     setEditingProjectId((current) => current === queuedProject.id ? null : current);
     if (navigate) setPage("queue");
-    notify("已保存到待发布");
+    notify("已保存到内容库");
     return queuedProject;
   };
 
@@ -1262,7 +1226,7 @@ export function App() {
       setActiveProject(makeOriginalProject({ id, createdAt: formatNow() }));
       setEditingProjectId(null);
       setPage("creation");
-      notify("当前创作已保存到待发布，并打开了新画板");
+      notify("当前创作已保存到内容库，并打开了新画板");
     } catch (error) {
       notify(error.message);
     } finally {
@@ -1286,16 +1250,17 @@ export function App() {
     if (project) notify("当前草稿及其真实文件已彻底删除，已打开新画板");
   };
 
-  const uploadProjectCovers = async (projectId, files) => {
+  const uploadProjectCovers = async (projectId, files, accountRole = "blogger") => {
     const revision = projectRevisionRef.current.get(projectId) || 0;
     try {
       const uploaded = [];
       for (const file of files) {
-        uploaded.push(await uploadProjectCoverFile({
+        const cover = await uploadProjectCoverFile({
           file,
           projectId,
           sessionId: storage?.sessionId || "",
-        }));
+        });
+        uploaded.push({ ...cover, accountRole });
       }
       if (abandonedProjectIdsRef.current.has(projectId) || (projectRevisionRef.current.get(projectId) || 0) !== revision) return;
       updateProjectById(projectId, (current) => ({
@@ -1483,20 +1448,25 @@ export function App() {
     const original = projectsRef.current.find((project) => project.id === projectId);
     setProjects((current) => current.filter((project) => project.id !== projectId));
     setEditingProjectId((current) => current === projectId ? null : current);
-    const deleted = await hardDeleteContent(projectId);
-    if (!deleted && original) setProjects((current) => current.some((project) => project.id === projectId) ? current : [original, ...current]);
-    return Boolean(deleted);
-  };
-
-  const publish = (project) => {
-    const snapshot = createArchiveSnapshot(project, compactTime());
-    setProjects((current) => current.filter((item) => item.id !== project.id));
-    setActiveProject((current) => current?.id === project.id ? null : current);
-    setEditingProjectId((current) => current === project.id ? null : current);
-    setArchiveItems((current) => [snapshot, ...current.filter((item) => item.id !== project.id)]);
-    setPublishProject(null);
-    setPage("archive");
-    notify("发布快照已冻结并进入归档");
+    window.clearTimeout(autosaveTimerRef.current);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/index`, {
+        method: "DELETE",
+        headers: {
+          "x-library-session-id": storage?.sessionId || "",
+          "x-library-revision": String(libraryRevisionRef.current),
+        },
+      });
+      const result = await response.json();
+      if (!response.ok || result.error) throw new Error(result.error || "删除索引失败");
+      if (result.library) applyLibraryData(result.library);
+      notify("已删除软件索引，Eagle 文件未受影响");
+      return true;
+    } catch (error) {
+      if (original) setProjects((current) => current.some((project) => project.id === projectId) ? current : [original, ...current]);
+      notify(error.message || "删除索引失败");
+      return false;
+    }
   };
 
   let main;
@@ -1550,23 +1520,9 @@ export function App() {
         onEdit={editProject}
         onDeleteProject={deleteQueuedProject}
         onUpdateProject={updateProjectById}
-        onPublish={setPublishProject}
         onUploadCovers={uploadProjectCovers}
         onUploadMedia={uploadProjectMedia}
         onRemoveMedia={removeProjectMedia}
-        onRevealTarget={revealProjectAsset}
-        setSidebarOpen={setSidebarOpen}
-        storage={storage}
-      />
-    );
-  } else if (page === "archive") {
-    main = (
-      <ArchivePage
-        archiveItems={archiveItems}
-        categories={categories}
-        categoryValue={categoryValue}
-        openCategoryManager={() => setCategoryManagerOpen(true)}
-        notify={notify}
         onRevealTarget={revealProjectAsset}
         setSidebarOpen={setSidebarOpen}
         storage={storage}
@@ -1601,16 +1557,15 @@ export function App() {
 
   const categoryCounts = Object.fromEntries(categories.map((category) => [
     category,
-    inspirationItems.filter((item) => categoryValue(item) === category).length + projects.filter((item) => categoryValue(item) === category).length + archiveItems.filter((item) => categoryValue(item) === category).length,
+    inspirationItems.filter((item) => categoryValue(item) === category).length + projects.filter((item) => categoryValue(item) === category).length,
   ]));
 
   return (
     <div className="app-frame">
-      <AppSidebar page={page} setPage={setPage} queueCount={projects.length} archivedCount={archiveItems.length} open={sidebarOpen} setOpen={setSidebarOpen} storage={storage} saveState={saveState} libraryBusy={libraryBusy} onLibraryAction={requestLibraryAction} />
+      <AppSidebar page={page} setPage={setPage} queueCount={projects.length} open={sidebarOpen} setOpen={setSidebarOpen} storage={storage} saveState={saveState} libraryBusy={libraryBusy} onLibraryAction={requestLibraryAction} />
       {sidebarOpen && <button type="button" className="sidebar-scrim" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} />}
       <div className="app-content">{main}</div>
       {choiceItem && <CreationChoiceModal item={choiceItem} projects={projects} onClose={() => setChoiceItem(null)} onNew={createNew} onAdd={addToExisting} notify={notify} />}
-      {publishProject && <PublishModal project={publishProject} onClose={() => setPublishProject(null)} onConfirm={publish} />}
       {categoryManagerOpen && <CategoryManagerModal categories={categories} counts={categoryCounts} onAdd={(category) => {
         userCategoriesStoredRef.current = true;
         setCategories((current) => [...current, category]);

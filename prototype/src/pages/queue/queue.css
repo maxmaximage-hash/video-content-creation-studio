@@ -949,3 +949,284 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* 双账号内容沉淀卡 */
+.queue-phase1 .queue-card {
+  min-height: 0;
+  display: block;
+  padding: 26px 28px;
+  border-color: rgba(255, 255, 255, .11);
+  background: #15161a;
+}
+
+.queue-phase1 .queue-card-main {
+  width: 100%;
+  display: grid;
+  gap: 22px;
+}
+
+.queue-phase1 .drag-zone {
+  left: 2px;
+  top: 50%;
+}
+
+.queue-phase1 .queue-card-header {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) auto auto;
+  align-items: start;
+  gap: 12px;
+}
+
+.queue-phase1 .queue-card-number {
+  color: #f7f7f8;
+  font-size: 52px;
+  line-height: .95;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-phase1 .queue-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #85868d;
+  font-size: 11px;
+}
+
+.queue-phase1 .queue-card-header .queue-category-control {
+  min-height: 32px;
+}
+
+.queue-phase1 .queue-card-header .delete-queue-button {
+  min-height: 40px;
+  padding: 0 18px;
+  border-color: #c79e50;
+  color: #17130d;
+  background: #e0b45e;
+  font-size: 13px;
+}
+
+.queue-phase1 .queue-card-header .delete-queue-button:hover {
+  border-color: #ebc77d;
+  background: #ebc36f;
+}
+
+.queue-phase1 .queue-account-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.queue-phase1 .queue-account-column {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.queue-phase1 .queue-account-title-row,
+.queue-phase1 .queue-account-body-row {
+  min-width: 0;
+  position: relative;
+  display: grid;
+  border: 1px solid rgba(255, 255, 255, .28);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .025);
+}
+
+.queue-phase1 .queue-account-title-row {
+  min-height: 56px;
+  grid-template-columns: auto minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px 7px 10px;
+}
+
+.queue-phase1 .queue-account-title-row > strong {
+  overflow: hidden;
+  color: #f0f0f2;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-phase1 .queue-account-badge {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, .25);
+  border-radius: 7px;
+  color: #eeeeef;
+  background: rgba(255, 255, 255, .055);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.queue-phase1 .queue-account-title-row .queue-title-editor {
+  min-height: 34px;
+  padding: 5px 0;
+  font-size: 17px;
+  line-height: 1.4;
+}
+
+.queue-phase1 .queue-account-title-row > .icon-button,
+.queue-phase1 .queue-account-body-row > .icon-button {
+  width: 30px;
+  height: 30px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.queue-phase1 .queue-account-body-row {
+  min-height: 132px;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  align-items: start;
+  gap: 8px;
+  padding: 10px 8px 10px 12px;
+}
+
+.queue-phase1 .queue-account-body-row .queue-body-editor {
+  height: 110px;
+  min-height: 110px;
+  max-height: 260px;
+  padding: 3px 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.queue-phase1 .queue-account-assets {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(116px, .9fr) minmax(220px, 1.7fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.queue-phase1 .queue-account-media {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(100px, 1fr));
+  align-items: start;
+  gap: 8px;
+}
+
+.queue-phase1 .queue-account-media .queue-media-card,
+.queue-phase1 .queue-account-media .queue-media-upload-card {
+  width: 100%;
+  min-height: 150px;
+}
+
+.queue-phase1 .queue-account-media .queue-media-viewport {
+  min-height: 100px;
+  max-height: 190px;
+}
+
+.queue-phase1 .queue-account-media .queue-media-upload-card strong {
+  color: #ededee;
+  font-size: 13px;
+}
+
+.queue-phase1 .queue-account-assets .queue-cover-gallery {
+  width: 100%;
+  max-width: 100%;
+  justify-self: stretch;
+}
+
+.queue-phase1 .queue-account-assets .queue-cover-gallery:not(.queue-cover-gallery-expanded) .expanded-cover-strip {
+  width: 100%;
+  min-height: 150px;
+  padding-right: 18px;
+}
+
+.queue-phase1 .queue-account-assets .queue-cover-item img,
+.queue-phase1 .queue-account-assets .queue-cover-gallery-expanded .queue-cover-item img {
+  max-width: 126px;
+  max-height: 150px;
+  object-fit: contain;
+}
+
+.queue-phase1 .queue-cover-empty {
+  width: 100%;
+  min-height: 150px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 7px;
+  border: 1px dashed rgba(255, 255, 255, .16);
+  border-radius: 7px;
+  color: #8f9097;
+  background: rgba(255, 255, 255, .015);
+  cursor: pointer;
+}
+
+.queue-phase1 .queue-account-column.is-expanded .queue-account-assets {
+  grid-template-columns: 1fr;
+}
+
+.queue-phase1 .queue-account-column.is-expanded .queue-cover-gallery-expanded {
+  grid-column: 1;
+}
+
+.queue-phase1 .queue-account-column.is-expanded .queue-cover-gallery-expanded .expanded-cover-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.queue-phase1 .queue-account-column.is-expanded .queue-account-media {
+  max-width: 300px;
+}
+
+.queue-phase1 .queue-card.queue-covers-open {
+  min-height: 0;
+}
+
+.queue-phase1 .queue-media-legacy-grid {
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+}
+
+@media (max-width: 1060px) {
+  .queue-phase1 .queue-account-grid {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+}
+
+@media (max-width: 680px) {
+  .queue-phase1 .queue-card {
+    padding: 18px 14px;
+  }
+
+  .queue-phase1 .queue-card-header {
+    grid-template-columns: 1fr auto;
+  }
+
+  .queue-phase1 .queue-card-meta {
+    display: none;
+  }
+
+  .queue-phase1 .queue-card-number {
+    font-size: 38px;
+  }
+
+  .queue-phase1 .queue-account-title-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .queue-phase1 .queue-account-title-row > .icon-button {
+    display: none;
+  }
+
+  .queue-phase1 .queue-account-assets {
+    grid-template-columns: 1fr;
+  }
+
+  .queue-phase1 .queue-account-media {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

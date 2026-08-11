@@ -403,7 +403,7 @@ function NewProjectModal({ onClose, onDiscard, onQueue }) {
         </button>
         <button type="button" onClick={onQueue}>
           <span><Inbox size={18} /></span>
-          <div><strong>保存到待发布</strong><p>完整保留当前标题、正文、分类、封面、参考和视频素材。</p></div>
+          <div><strong>保存到内容库</strong><p>完整保留当前标题、正文、分类、封面、参考和视频素材。</p></div>
         </button>
       </div>
       <div className="modal-footer">
@@ -598,7 +598,7 @@ export function CreationPage({
               <button type="button" className={!creationComplete ? "active" : ""} aria-pressed={!creationComplete} onClick={() => setCreationStatus("in_progress")}>正在创作</button>
               <button type="button" className={creationComplete ? "active completed" : ""} aria-pressed={creationComplete} onClick={() => setCreationStatus("completed")}>创作已完成</button>
             </div>
-            <button type="button" className="primary-button" onClick={() => onQueue(project.id)}><Inbox size={16} />保存到待发布</button>
+            <button type="button" className="primary-button" onClick={() => onQueue(project.id)}><Inbox size={16} />保存到内容库</button>
           </div>
         )}
       />
@@ -669,13 +669,13 @@ export function CreationPage({
           </section>
 
           <section className="editor-section">
-            <div className="section-heading"><div><span>标题</span><small>发布时将冻结为快照</small></div><CreationCopyButton value={project.title} notify={notify} /></div>
+            <div className="section-heading"><div><span>标题</span><small>保存后可在内容库继续维护</small></div><CreationCopyButton value={project.title} notify={notify} /></div>
             <input className="title-input" value={project.title} onChange={(event) => update("title", event.target.value)} placeholder="输入视频标题" />
           </section>
 
           <section className="editor-section body-section">
             <div className="section-heading"><div><span>正文</span><small>{project.body.length} 字</small></div><CreationCopyButton value={project.body} notify={notify} /></div>
-            <textarea value={project.body} onChange={(event) => update("body", event.target.value)} placeholder="写下视频正文、口播文案或发布说明" />
+            <textarea value={project.body} onChange={(event) => update("body", event.target.value)} placeholder="写下视频正文、口播文案或内容说明" />
           </section>
 
           <section className="editor-section project-media-section">

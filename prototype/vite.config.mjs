@@ -37,6 +37,7 @@ import {
   stripContentFromLibrary,
 } from "./server/library-hard-delete.mjs";
 import { createTranscriptionService } from "./server/transcription-service.mjs";
+import { removeProjectIndex } from "./server/project-index.mjs";
 import {
   isPathInside,
   validateContentId,
@@ -3184,9 +3185,31 @@ function installLibraryApi(server, libraryManager, options = {}) {
           }
           return;
         }
-        if (!req.url?.startsWith("/api/library") && !req.url?.startsWith("/api/content/") && !req.url?.startsWith("/api/content-ids") && !req.url?.startsWith("/api/extract") && !req.url?.startsWith("/api/profile-scans") && !req.url?.startsWith("/api/transcription/") && !req.url?.startsWith("/api/covers") && !req.url?.startsWith("/api/project-media") && !req.url?.startsWith("/api/project-actions") && !req.url?.startsWith("/api/project-assets/status") && !req.url?.startsWith("/api/auth/") && !req.url?.startsWith("/api/inspirations/")) return next();
+        if (!req.url?.startsWith("/api/library") && !req.url?.startsWith("/api/content/") && !req.url?.startsWith("/api/content-ids") && !req.url?.startsWith("/api/extract") && !req.url?.startsWith("/api/profile-scans") && !req.url?.startsWith("/api/transcription/") && !req.url?.startsWith("/api/covers") && !req.url?.startsWith("/api/project-media") && !req.url?.startsWith("/api/project-actions") && !req.url?.startsWith("/api/project-assets/status") && !req.url?.startsWith("/api/projects/") && !req.url?.startsWith("/api/auth/") && !req.url?.startsWith("/api/inspirations/")) return next();
         res.setHeader("content-type", "application/json; charset=utf-8");
         try {
+          if (req.url.startsWith("/api/projects/")) {
+            const requestUrl = new URL(req.url, "http://local");
+            const match = requestUrl.pathname.match(/^\/api\/projects\/([^/]+)\/index$/);
+            if (!match) {
+              res.statusCode = 404;
+              res.end(JSON.stringify({ error: "找不到这个项目索引接口" }));
+              return;
+            }
+            if (req.method !== "DELETE") {
+              res.statusCode = 405;
+              res.end(JSON.stringify({ error: "Method not allowed" }));
+              return;
+            }
+            const result = await removeProjectIndex({
+              projectId: decodeURIComponent(match[1]),
+              sessionId: req.headers["x-library-session-id"] || "",
+              expectedRevision: req.headers["x-library-revision"] || "",
+              libraryManager,
+            });
+            res.end(JSON.stringify(result));
+            return;
+          }
           if (req.url.startsWith("/api/content/")) {
             if (req.method !== "DELETE") {
               res.statusCode = 405;
