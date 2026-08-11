@@ -765,7 +765,7 @@ export function InspirationsPage({
               categoryValue={categoryValue}
               renderMediaPreview={renderMediaPreview}
               onCategoryChange={(id, value) => updateCard(id, { category: value, categoryAssignedByUser: true }, { persist: true })}
-              onBodyChange={(id, value) => updateCard(id, { body: value }, { persist: true, delay: 450 })}
+              onBodyChange={(id, value) => updateCard(id, value && typeof value === "object" ? value : { body: value }, { persist: true, delay: 450 })}
               onExtract={extractCard}
               onRepairMissing={(card) => extractCard(card, { repairMissingOnly: true })}
               onTranscribe={transcribeCard}
@@ -774,6 +774,7 @@ export function InspirationsPage({
               onRemove={() => removeCard(item)}
               onCreate={onCreate}
               notify={notify}
+              sessionId={storage?.sessionId || ""}
               key={item.id}
             />
           ))}

@@ -7,9 +7,15 @@ import {
   projectMediaSlotProjection,
   removeProjectMediaSlotReference,
 } from "../../services/project-media-slots.js";
+import { eagleMediaSource } from "../../services/eagle-media.js";
 
 export function coverSource(item) {
-  return item?.src || item?.localPath || item?.cover || item?.coverLocalPath || item?.sourceUrl || item?.coverUrl || item?.url || item?.image || item?.thumbnail || "";
+  const type = String(item?.contentType || "").toLowerCase();
+  const role = String(item?.role || "").toLowerCase();
+  const eagleCover = (type.startsWith("image/") || role === "cover" || item?.coverKind)
+    ? eagleMediaSource(item)
+    : "";
+  return eagleCover || item?.src || item?.localPath || item?.cover || item?.coverLocalPath || item?.sourceUrl || item?.coverUrl || item?.url || item?.image || item?.thumbnail || "";
 }
 
 export function projectCoverCandidates(project) {

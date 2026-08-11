@@ -6,6 +6,20 @@ import test from "node:test";
 import { createLibraryManager } from "../server/library-manager.mjs";
 import { createProjectIndex, removeProjectIndex } from "../server/project-index.mjs";
 
+function persistedFixture(library, overrides = {}) {
+  const {
+    storage: _storage,
+    libraryOpen: _libraryOpen,
+    sessionId: _sessionId,
+    revision: _revision,
+    ...persisted
+  } = library;
+  return {
+    ...persisted,
+    ...overrides,
+  };
+}
+
 test("creating a project index atomically allocates an ID without replacing existing projects", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-studio-index-create-"));
   const libraryManager = createLibraryManager({ initialLibraryDir: null, qaMode: true });
@@ -75,7 +89,7 @@ test("removing one project index preserves its physical files and every other pr
   }
 });
 
-test("stale project index mutations reject without replacing the current library", async () => {
+test("stale project index creation rejects without replacing the current library", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-studio-index-conflict-"));
   const libraryManager = createLibraryManager({ initialLibraryDir: null, qaMode: true });
   try {
@@ -97,18 +111,106 @@ test("stale project index mutations reject without replacing the current library
       }),
       (error) => error.statusCode === 409,
     );
-    await assert.rejects(
-      removeProjectIndex({
-        projectId: "C000901",
-        sessionId: opened.storage.sessionId,
-        expectedRevision: revision - 1,
-        libraryManager,
-      }),
-      (error) => error.statusCode === 409,
-    );
 
     const persisted = await libraryManager.readLibrary();
     assert.deepEqual(persisted.projects.map((project) => project.id), ["C000901"]);
+  } finally {
+    await libraryManager.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("stale project index deletion rebases external fields and local dirty edits without a whole-library save", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-studio-index-rebase-"));
+  const libraryManager = createLibraryManager({ initialLibraryDir: null, qaMode: true });
+  try {
+    const opened = await libraryManager.manage("new", { path: path.join(root, "fixture.library") });
+    const indexFile = path.join(opened.storage.libraryDir, "library.json");
+    const base = persistedFixture(await libraryManager.readLibrary(), {
+      libraryRevision: 475,
+      projects: [
+        { id: "C000022", title: "删除目标", body: "旧页面目标", covers: [], mediaAssets: [] },
+        { id: "C000023", title: "旧页面保留", body: "客户端本地文案", covers: [], mediaAssets: [] },
+      ],
+      inspirations: [{ id: "I000010", title: "旧页面灵感" }],
+      archive: [],
+      activeProject: null,
+    });
+    await fs.writeFile(indexFile, `${JSON.stringify(base, null, 2)}\n`, "utf8");
+    const concurrent = {
+      ...base,
+      libraryRevision: 476,
+      projects: [
+        base.projects[0],
+        {
+          ...base.projects[1],
+          title: "迁移专项已修改",
+          body: "服务端最新文案",
+          eagleRouting: { bloggerSourceFolderId: "MSOSLZLAY5RGP" },
+          mediaAssets: [{ id: "asset-external", role: "source_video", accountRole: "blogger", eagleItemId: "EAGLE-C000023-SOURCE" }],
+        },
+        { id: "C000024", title: "迁移专项新增", body: "", covers: [], mediaAssets: [] },
+      ],
+      inspirations: [...base.inspirations, { id: "I000011", title: "迁移专项新增灵感" }],
+    };
+    await fs.writeFile(indexFile, `${JSON.stringify(concurrent, null, 2)}\n`, "utf8");
+
+    const result = await removeProjectIndex({
+      projectId: "C000022",
+      sessionId: opened.storage.sessionId,
+      expectedRevision: 475,
+      projectPatches: [{
+        projectId: "C000023",
+        operations: [{ path: ["title"], value: "本地未保存标题" }],
+      }],
+      libraryManager,
+    });
+
+    assert.equal(result.removedProjectId, "C000022");
+    assert.equal(result.filesPreserved, true);
+    assert.equal(result.revision, 477);
+    assert.equal(Object.hasOwn(result, "library"), false);
+    assert.deepEqual(result.reconciledProjects.map((project) => project.id), ["C000023"]);
+    const persisted = await libraryManager.readLibrary();
+    assert.equal(persisted.revision, 477);
+    assert.deepEqual(persisted.projects.map((project) => project.id), ["C000023", "C000024"]);
+    const preserved = persisted.projects.find((project) => project.id === "C000023");
+    assert.equal(preserved.title, "本地未保存标题");
+    assert.equal(preserved.body, "服务端最新文案");
+    assert.equal(preserved.eagleRouting.bloggerSourceFolderId, "MSOSLZLAY5RGP");
+    assert.equal(preserved.mediaAssets[0].eagleItemId, "EAGLE-C000023-SOURCE");
+    assert.deepEqual(persisted.inspirations.map((item) => item.id), ["I000010", "I000011"]);
+  } finally {
+    await libraryManager.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("removing an already-missing project index is idempotent", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-studio-index-idempotent-"));
+  const libraryManager = createLibraryManager({ initialLibraryDir: null, qaMode: true });
+  try {
+    const opened = await libraryManager.manage("new", { path: path.join(root, "fixture.library") });
+    await libraryManager.writeLibrary({
+      projects: [{ id: "C000901", title: "保留内容", covers: [], mediaAssets: [] }],
+      inspirations: [],
+      archive: [],
+      activeProject: null,
+    }, opened.storage.sessionId);
+    const before = (await libraryManager.readLibrary()).revision;
+
+    const result = await removeProjectIndex({
+      projectId: "C000999",
+      sessionId: opened.storage.sessionId,
+      expectedRevision: before - 1,
+      libraryManager,
+    });
+
+    assert.equal(result.removedProjectId, "C000999");
+    assert.equal(result.filesPreserved, true);
+    assert.equal(result.alreadyRemoved, true);
+    assert.equal(result.revision, before);
+    assert.deepEqual((await libraryManager.readLibrary()).projects.map((project) => project.id), ["C000901"]);
   } finally {
     await libraryManager.dispose();
     await fs.rm(root, { recursive: true, force: true });

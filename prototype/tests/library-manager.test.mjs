@@ -97,7 +97,7 @@ test("missing NAS index is protected and never replaced with an empty library", 
   assert.equal(JSON.parse(await fs.readFile(hiddenPath, "utf8")).inspirations[0].title, "必须保留");
 });
 
-test("a second computer opens the same library read-only until the writer releases its lease", async (t) => {
+test("two computers can open the same library and take short write locks only while mutating", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-library-writer-lease-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const first = createLibraryManager({ initialLibraryDir: null });
@@ -107,15 +107,89 @@ test("a second computer opens the same library read-only until the writer releas
   const created = await first.manage("new", { path: path.join(root, "团队资料库") });
   const opened = await second.manage("open", { path: created.storage.libraryDir });
   assert.equal(created.storage.mode, "read_write");
-  assert.equal(opened.storage.mode, "read_only");
+  assert.equal(opened.storage.mode, "read_write");
+
+  await first.mutateLibrary(({ current }) => ({
+    payload: {
+      ...current,
+      inspirations: [{ id: "I000101", title: "第一台写入" }, ...(current.inspirations || [])],
+    },
+  }), created.storage.sessionId);
+  const saved = await second.mutateLibrary(({ current }) => ({
+    payload: {
+      ...current,
+      inspirations: [...(current.inspirations || []), { id: "I000102", title: "第二台写入" }],
+    },
+  }), opened.storage.sessionId);
+
+  assert.equal(saved.library.storage.mode, "read_write");
+  assert.deepEqual((await first.readLibrary()).inspirations.map((item) => item.id), ["I000101", "I000102"]);
+});
+
+test("concurrent mutations from independent managers serialize through a short lock", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-library-concurrent-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const first = createLibraryManager({ initialLibraryDir: null });
+  const second = createLibraryManager({ initialLibraryDir: null });
+  t.after(() => first.dispose());
+  t.after(() => second.dispose());
+  const created = await first.manage("new", { path: path.join(root, "并发资料库") });
+  const opened = await second.manage("open", { path: created.storage.libraryDir });
+
+  await Promise.all([
+    first.mutateLibrary(({ current }) => ({
+      payload: {
+        ...current,
+        projects: [...(current.projects || []), { id: "C000201", title: "A", covers: [], mediaAssets: [] }],
+      },
+    }), created.storage.sessionId),
+    second.mutateLibrary(({ current }) => ({
+      payload: {
+        ...current,
+        projects: [...(current.projects || []), { id: "C000202", title: "B", covers: [], mediaAssets: [] }],
+      },
+    }), opened.storage.sessionId),
+  ]);
+
+  assert.deepEqual((await first.readLibrary()).projects.map((item) => item.id).sort(), ["C000201", "C000202"]);
+});
+
+test("an expired writer lock is reclaimed automatically after a crashed client", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-library-expired-lock-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const first = createLibraryManager({ initialLibraryDir: null });
+  const second = createLibraryManager({
+    initialLibraryDir: null,
+    writeLease: { ownerId: "second-client", ttlMs: 300, heartbeatMs: 100, waitTimeoutMs: 50 },
+  });
+  t.after(() => first.dispose());
+  t.after(() => second.dispose());
+  const created = await first.manage("new", { path: path.join(root, "崩溃资料库") });
+  const opened = await second.manage("open", { path: created.storage.libraryDir });
+  const lockPath = path.join(created.storage.libraryDir, "metadata", "library-writer.lock.json");
+  const now = Date.now();
+  await fs.writeFile(lockPath, `${JSON.stringify({
+    schemaVersion: 1,
+    ownerId: "crashed-client",
+    host: "nas-client",
+    pid: 999999,
+    acquiredAt: new Date(now - 1_000).toISOString(),
+    heartbeatAt: new Date(now - 1_000).toISOString(),
+    expiresAt: new Date(now + 300).toISOString(),
+  }, null, 2)}\n`, "utf8");
+
   await assert.rejects(
-    second.writeLibrary({ inspirations: [{ id: "I000099" }] }, opened.storage.sessionId),
+    second.mutateLibrary(({ current }) => ({
+      payload: { ...current, inspirations: [{ id: "I000301" }] },
+    }), opened.storage.sessionId),
     (error) => error.statusCode === 423 && error.code === "LIBRARY_WRITE_LOCKED",
   );
-  await first.manage("close", { sessionId: created.storage.sessionId });
-  const saved = await second.writeLibrary({ inspirations: [{ id: "I000099" }] }, opened.storage.sessionId);
-  assert.equal(saved.inspirations[0].id, "I000099");
-  assert.equal(saved.storage.mode, "read_write");
+
+  await new Promise((resolve) => setTimeout(resolve, 420));
+  await second.mutateLibrary(({ current }) => ({
+    payload: { ...current, inspirations: [{ id: "I000301" }] },
+  }), opened.storage.sessionId);
+  assert.deepEqual((await second.readLibrary()).inspirations.map((item) => item.id), ["I000301"]);
 });
 
 test("concurrent writes from the same app share one library lease heartbeat", async (t) => {

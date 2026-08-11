@@ -28,6 +28,7 @@ import {
   uploadProjectCoverFile,
   uploadProjectMediaFile,
 } from "./services/project-media.js";
+import { eagleMediaSource } from "./services/eagle-media.js";
 import {
   Check,
   CheckCircle2,
@@ -217,6 +218,67 @@ function librarySavePayload({ legacyCategories = [], categories = [], hasUserDef
 
 function stableLibrarySnapshot(payload) {
   return JSON.stringify(payload);
+}
+
+function sameStructuredValue(previous, next) {
+  if (Object.is(previous, next)) return true;
+  try {
+    return JSON.stringify(previous) === JSON.stringify(next);
+  } catch {
+    return false;
+  }
+}
+
+function savedLibraryPayload(snapshot) {
+  try {
+    const value = JSON.parse(snapshot || "");
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function collectProjectPatchOperations(previous, next, path = [], operations = []) {
+  if (sameStructuredValue(previous, next)) return operations;
+  const previousObject = previous && typeof previous === "object";
+  const nextObject = next && typeof next === "object";
+  if (!previousObject || !nextObject || Array.isArray(previous) || Array.isArray(next)) {
+    operations.push({ path, value: next });
+    return operations;
+  }
+  const fields = new Set([...Object.keys(previous), ...Object.keys(next)]);
+  for (const field of fields) {
+    if (field === "id") continue;
+    const nextPath = [...path, field];
+    if (!Object.hasOwn(next, field)) {
+      operations.push({ path: nextPath, remove: true });
+    } else if (!Object.hasOwn(previous, field)) {
+      operations.push({ path: nextPath, value: next[field] });
+    } else {
+      collectProjectPatchOperations(previous[field], next[field], nextPath, operations);
+    }
+  }
+  return operations;
+}
+
+function dirtyProjectPatches(snapshot, projects, activeProject, removedProjectId) {
+  const saved = savedLibraryPayload(snapshot);
+  if (!saved) return [];
+  const baseline = new Map([
+    ...(saved.projects || []),
+    ...(saved.activeProject ? [saved.activeProject] : []),
+  ].filter((project) => project?.id).map((project) => [project.id, project]));
+  const current = new Map([
+    ...projects,
+    ...(activeProject ? [activeProject] : []),
+  ].filter((project) => project?.id).map((project) => [project.id, project]));
+  return [...current.entries()]
+    .filter(([projectId]) => projectId !== removedProjectId && baseline.has(projectId))
+    .map(([projectId, project]) => ({
+      projectId,
+      operations: collectProjectPatchOperations(baseline.get(projectId), project),
+    }))
+    .filter((patch) => patch.operations.length);
 }
 
 function IconButton({ label, children, className = "", onClick, disabled = false }) {
@@ -486,12 +548,15 @@ function MediaPreview({ item, compact = false }) {
   const [isMuted, setIsMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [videoReady, setVideoReady] = useState(false);
+  const [mediaError, setMediaError] = useState("");
   const coverSrc = coverSource(item);
-  const videoSrc = item.videoLocalPath || item.videoPreviewUrl || (item.videoUrl ? `/library-proxy/media?url=${encodeURIComponent(item.videoUrl)}` : "");
+  const eagleSrc = eagleMediaSource(item);
+  const videoSrc = eagleSrc || item.videoLocalPath || item.videoPreviewUrl || (item.videoUrl ? `/library-proxy/media?url=${encodeURIComponent(item.videoUrl)}` : "");
   const progress = mediaDuration > 0 ? Math.min(100, Math.max(0, (currentTime / mediaDuration) * 100)) : 0;
 
   useEffect(() => {
     setVideoReady(false);
+    setMediaError("");
     return () => clearTimeout(hoverTimerRef.current);
   }, [videoSrc]);
 
@@ -520,6 +585,15 @@ function MediaPreview({ item, compact = false }) {
   const pause = () => {
     if (!videoRef.current) return;
     videoRef.current.pause();
+  };
+  const resetPreview = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.pause();
+    try {
+      video.currentTime = 0;
+      setCurrentTime(0);
+    } catch {}
   };
   const togglePlay = () => {
     if (!videoRef.current) return;
@@ -578,7 +652,7 @@ function MediaPreview({ item, compact = false }) {
       onMouseLeave={() => {
         clearTimeout(hoverTimerRef.current);
         manualPausedRef.current = false;
-        pause();
+        resetPreview();
       }}
     >
       {coverSrc ? <ResilientImage src={coverSrc} alt="" onMissing={item.onMediaMissing} onLoad={item.onMediaLoaded} /> : <CoverPlaceholder item={item} />}
@@ -606,15 +680,29 @@ function MediaPreview({ item, compact = false }) {
               setVideoReady(true);
             }}
             onPause={() => setIsPlaying(false)}
-            onError={() => setIsPlaying(false)}
+            onError={() => {
+              setIsPlaying(false);
+              setMediaError(eagleSrc ? "Eagle 文件不可用/重新关联" : "视频文件不可用");
+            }}
           />
+          {mediaError && (
+            <div className="media-error-state" role="status">
+              <strong>{mediaError}</strong>
+              <small>{eagleSrc ? "请确认 Eagle 已启动且素材未被移动或删除" : "请修复素材后重试"}</small>
+            </div>
+          )}
           <div
             className="media-hover-surface"
             aria-hidden="true"
             onMouseEnter={() => {
               clearTimeout(hoverTimerRef.current);
               hoverTimerRef.current = setTimeout(() => {
-                if (!manualPausedRef.current) void play({ allowMutedFallback: true });
+                if (!manualPausedRef.current && videoRef.current) {
+                  videoRef.current.muted = true;
+                  autoMutedRef.current = true;
+                  setIsMuted(true);
+                  void play({ allowMutedFallback: true });
+                }
               }, 180);
             }}
           />
@@ -1337,26 +1425,30 @@ export function App() {
 
   const uploadProjectCovers = async (projectId, files, accountRole = "blogger") => {
     const revision = projectRevisionRef.current.get(projectId) || 0;
-    try {
-      const uploaded = [];
-      for (const file of files) {
+    let successCount = 0;
+    let failureCount = 0;
+    for (const file of files) {
+      try {
         const cover = await uploadProjectCoverFile({
           file,
           projectId,
+          accountRole,
           sessionId: storage?.sessionId || "",
         });
-        uploaded.push({ ...cover, accountRole });
+        if (abandonedProjectIdsRef.current.has(projectId) || (projectRevisionRef.current.get(projectId) || 0) !== revision) return;
+        updateProjectById(projectId, (current) => ({
+          ...current,
+          covers: [...(current.covers || []), { ...cover, accountRole }],
+          modified: "刚刚",
+        }));
+        successCount += 1;
+      } catch (error) {
+        failureCount += 1;
+        notify(`${file.name}：${error.message || "封面上传失败"}`);
       }
-      if (abandonedProjectIdsRef.current.has(projectId) || (projectRevisionRef.current.get(projectId) || 0) !== revision) return;
-      updateProjectById(projectId, (current) => ({
-        ...current,
-        covers: [...(current.covers || []), ...uploaded],
-        modified: "刚刚",
-      }));
-      notify(`已添加 ${uploaded.length} 张本地封面`);
-    } catch (error) {
-      notify(error.message || "封面上传失败");
     }
+    if (successCount) notify(`已导入 Eagle 并添加 ${successCount} 张封面`);
+    if (failureCount) notify(`${failureCount} 张封面导入失败，可单独重试`);
   };
 
   const updateUploadTask = (projectId, uploadKey, taskId, updater) => {
@@ -1454,12 +1546,15 @@ export function App() {
       item.role === role && (!mediaId || item.id === mediaId)
     ));
     const relativePath = libraryRelativePath(media);
+    const eagleItemId = String(media?.eagleItemId || "");
     const label = projectMediaSlotLabel(role, accountRole);
-    if (!project || !media || !relativePath) {
+    if (!project || !media || (!relativePath && !eagleItemId)) {
       notify(`找不到要删除的${label}`);
       return false;
     }
-    const confirmed = window.confirm(`永久删除这条${label}？\n\n文件会从当前 .library 中彻底删除，无法恢复。`);
+    const confirmed = window.confirm(eagleItemId
+      ? `确定从内容中移除这条${label}吗？\n\n只会解除软件索引，Eagle 原文件不会被删除。`
+      : `永久删除这条${label}？\n\n文件会从当前 .library 中彻底删除，无法恢复。`);
     if (!confirmed) return false;
     try {
       const result = await deleteProjectMediaFile({
@@ -1468,11 +1563,12 @@ export function App() {
         accountRole,
         mediaId: media.id || mediaId,
         relativePath,
+        eagleItemId,
         legacyAccountRole: Boolean(options.legacyAccountRole || media.legacyAccountRole),
         sessionId: storage?.sessionId || "",
       });
       if (result.library) applyLibraryData(result.library);
-      notify(`已从资料库永久删除${label}`);
+      notify(eagleItemId ? `已解除${label}的软件索引，Eagle 文件未受影响` : `已从资料库永久删除${label}`);
       return true;
     } catch (error) {
       notify(error.message || `${label}删除失败`);
@@ -1531,13 +1627,23 @@ export function App() {
 
   const deleteQueuedProject = async (projectId) => {
     try {
-      const saved = await persistCurrentLibrary();
+      window.clearTimeout(autosaveTimerRef.current);
+      if (saveInFlightRef.current) await saveInFlightRef.current;
+      const localPayload = currentLibraryPayload();
+      const projectPatches = dirtyProjectPatches(
+        lastSavedSnapshotRef.current,
+        localPayload.projects,
+        localPayload.activeProject,
+        projectId,
+      );
       const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/index`, {
         method: "DELETE",
         headers: {
+          "content-type": "application/json",
           "x-library-session-id": storage?.sessionId || "",
           "x-library-revision": String(libraryRevisionRef.current),
         },
+        body: JSON.stringify({ projectPatches }),
       });
       const result = await response.json();
       if (!response.ok || result.error) {
@@ -1546,26 +1652,41 @@ export function App() {
         error.data = result;
         throw error;
       }
-      const nextProjects = saved.payload.projects.filter((project) => project.id !== projectId);
+      const reconciledById = new Map((result.reconciledProjects || []).map((project) => [project.id, project]));
+      const nextProjects = localPayload.projects
+        .filter((project) => project.id !== projectId)
+        .map((project) => reconciledById.get(project.id) || project);
+      const nextActiveProject = localPayload.activeProject?.id === projectId
+        ? null
+        : (reconciledById.get(localPayload.activeProject?.id) || localPayload.activeProject);
+      const nextPayload = {
+        ...localPayload,
+        projects: nextProjects,
+        activeProject: nextActiveProject,
+      };
       if (result.storage) setStorage(result.storage);
       if (result.revision) {
         libraryRevisionRef.current = result.revision;
         setLibraryRevision(result.revision);
       }
-      lastSavedSnapshotRef.current = stableLibrarySnapshot({
-        ...saved.payload,
-        projects: nextProjects,
-      });
+      const savedPayload = savedLibraryPayload(lastSavedSnapshotRef.current);
+      if (savedPayload) {
+        lastSavedSnapshotRef.current = stableLibrarySnapshot({
+          ...savedPayload,
+          projects: (savedPayload.projects || [])
+            .filter((project) => project.id !== projectId)
+            .map((project) => reconciledById.get(project.id) || project),
+          activeProject: reconciledById.get(savedPayload.activeProject?.id) || nextActiveProject,
+        });
+      }
       setProjects(nextProjects);
+      setActiveProject(nextActiveProject);
       setEditingProjectId((current) => current === projectId ? null : current);
       setSaveState("saved");
       notify("已删除软件索引，Eagle 文件未受影响");
       return true;
     } catch (error) {
-      const message = error.status === 409
-        ? "删除未执行：资料库版本已变化，当前页面内容保持不变"
-        : error.message || "删除索引失败";
-      notify(message);
+      notify(error.message || "删除索引失败");
       return false;
     }
   };
@@ -1594,6 +1715,7 @@ export function App() {
             onBodyChange={handlers.onBodyChange}
             onDetach={handlers.onDetach}
             notify={notify}
+            sessionId={storage?.sessionId || ""}
             categoryValue={categoryValue}
             renderMediaPreview={(media) => <MediaPreview item={media} />}
             key={item.id}

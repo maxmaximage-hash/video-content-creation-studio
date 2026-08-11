@@ -41,6 +41,7 @@ import {
   projectMediaSlotKey,
   projectMediaSlotProjection,
 } from "./project-model.js";
+import { eagleMediaSource } from "../../services/eagle-media.js";
 import "./creation.css";
 
 const VIDEO_ACCEPT = "video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm";
@@ -144,6 +145,7 @@ function ProjectMediaSlot({
 }) {
   const [fileDragActive, setFileDragActive] = useState(false);
   const dropDepthRef = useRef(0);
+  const mediaSrc = media?.src || eagleMediaSource(media);
   const nativeDraggable = Boolean(media?.relativePath && window.videoContentDesktop?.startFileDrag);
   const startNativeFileDrag = (event) => {
     if (!nativeDraggable) return;
@@ -175,7 +177,7 @@ function ProjectMediaSlot({
   };
   return (
     <div
-      className={`project-media-slot ${media?.src ? "has-media" : ""} ${fileDragActive ? "is-file-dragging" : ""}`}
+      className={`project-media-slot ${mediaSrc ? "has-media" : ""} ${fileDragActive ? "is-file-dragging" : ""}`}
       data-no-sort
       onDragEnter={(event) => {
         if (!hasDraggedFiles(event)) return;
@@ -200,11 +202,11 @@ function ProjectMediaSlot({
         <span className="project-media-slot-icon">{role === "source_video" ? <Video size={18} /> : <FileVideo2 size={18} />}</span>
         <div><strong>{title}</strong><small>{legacy ? "历史素材 · 账号未标注" : description}</small></div>
       </div>
-      {media?.src ? (
+      {mediaSrc ? (
         <>
           <video
-            key={media.src}
-            src={media.src}
+            key={mediaSrc}
+            src={mediaSrc}
             controls
             preload="metadata"
             playsInline
@@ -214,7 +216,7 @@ function ProjectMediaSlot({
           />
           <div className="project-media-file">
             <div><strong title={media.name}>{media.name}</strong><span>{size}</span></div>
-            <button type="button" className="quiet-button" onClick={onReveal}><FolderOpen size={14} />访达</button>
+            {media?.relativePath && <button type="button" className="quiet-button" onClick={onReveal}><FolderOpen size={14} />访达</button>}
             {onChoose && <button type="button" className="quiet-button" onClick={onChoose}><RefreshCw size={14} />替换</button>}
             <CreationIconButton label={`永久删除${title}`} onClick={onRemove}><X size={15} /></CreationIconButton>
           </div>
@@ -743,7 +745,7 @@ export function CreationPage({
               {project.references.length
                 ? project.references.map((item) => renderReferenceCard(item, {
                     onCategoryChange: (id, value) => onUpdateReference(project.id, id, { category: value, categoryAssignedByUser: true }),
-                    onBodyChange: (id, value) => onUpdateReference(project.id, id, { body: value }),
+                    onBodyChange: (id, value) => onUpdateReference(project.id, id, value && typeof value === "object" ? value : { body: value }),
                     onDetach: (id) => onUpdateProject(project.id, (current) => ({ ...current, references: current.references.filter((reference) => reference.id !== id), modified: "刚刚" })),
                   }))
                 : <p className="muted-line">这个内容还没有关联灵感。</p>}

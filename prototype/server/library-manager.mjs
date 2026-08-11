@@ -400,7 +400,6 @@ export function createLibraryManager(options = {}) {
   async function requireWritable(expectedSessionId = "") {
     const paths = requireActive(expectedSessionId);
     await ensureCurrentLibrary();
-    await ensureWriteLease(paths);
     return { ...paths, sessionId, ...writeLease.state() };
   }
 
@@ -419,6 +418,11 @@ export function createLibraryManager(options = {}) {
   async function ensureWriteLease(paths) {
     await ensureLeaseConfigured(paths);
     return writeLease.ensureOwned();
+  }
+
+  async function releaseWriteLease() {
+    await writeLease.release();
+    leaseLibraryDir = "";
   }
 
   async function ensureCurrentLibrary() {
@@ -576,22 +580,26 @@ export function createLibraryManager(options = {}) {
 
   async function performWriteLibrary(payload, expectedSessionId, expectedRevision) {
     const paths = requireActive(expectedSessionId);
-    const current = await readLibrary();
-    await assertExpectedRevision(expectedRevision, current);
     await ensureWriteLease(paths);
-    await ensureFolders(paths);
-    const next = persistedLibrary(paths, current, payload);
-    if (JSON.stringify(persistedShape(current)) !== JSON.stringify(persistedShape(next))) {
-      if (!qaMode) assertSafeReplacement(current, next);
-      next.libraryRevision = (Number(current.libraryRevision) || 1) + 1;
-      await writeIndex(paths, next, { label: "autosave" });
-      await syncContentUnits(paths, next);
-      await cleanupTempFiles(paths);
-      revision = next.libraryRevision;
-    } else {
-      revision = Number(current.libraryRevision) || 1;
+    try {
+      const current = await readLibrary();
+      await assertExpectedRevision(expectedRevision, current);
+      await ensureFolders(paths);
+      const next = persistedLibrary(paths, current, payload);
+      if (JSON.stringify(persistedShape(current)) !== JSON.stringify(persistedShape(next))) {
+        if (!qaMode) assertSafeReplacement(current, next);
+        next.libraryRevision = (Number(current.libraryRevision) || 1) + 1;
+        await writeIndex(paths, next, { label: "autosave" });
+        await syncContentUnits(paths, next);
+        await cleanupTempFiles(paths);
+        revision = next.libraryRevision;
+      } else {
+        revision = Number(current.libraryRevision) || 1;
+      }
+      return runtimeLibrary(next);
+    } finally {
+      await releaseWriteLease();
     }
-    return runtimeLibrary(next);
   }
 
   function writeLibrary(payload, expectedSessionId = "", expectedRevision = "") {
@@ -606,13 +614,14 @@ export function createLibraryManager(options = {}) {
 
   async function performMutation(mutator, expectedSessionId, expectedRevision) {
     const paths = requireActive(expectedSessionId);
-    const current = await readLibrary();
-    await assertExpectedRevision(expectedRevision, current);
     await ensureWriteLease(paths);
-    await ensureFolders(paths);
+    let current;
     let mutation;
     let committed = false;
     try {
+      current = await readLibrary();
+      await assertExpectedRevision(expectedRevision, current);
+      await ensureFolders(paths);
       mutation = await mutator({
         current,
         paths,
@@ -640,6 +649,8 @@ export function createLibraryManager(options = {}) {
     } catch (error) {
       if (!committed) await Promise.resolve(mutation?.rollback?.({ current, paths })).catch(() => {});
       throw error;
+    } finally {
+      await releaseWriteLease();
     }
   }
 
@@ -657,47 +668,51 @@ export function createLibraryManager(options = {}) {
     const normalizedPrefix = String(prefix || "").toUpperCase();
     if (!["I", "C"].includes(normalizedPrefix)) throw libraryError("内容 ID 前缀无效");
     const paths = requireActive(expectedSessionId);
-    const current = await readLibrary();
-    await assertExpectedRevision(expectedRevision, current);
     await ensureWriteLease(paths);
-    await ensureFolders(paths);
-    const indexedItems = [
-      ...(current.inspirations || []),
-      ...(current.projects || []),
-      ...(current.archive || []),
-      current.activeProject,
-    ].filter(Boolean);
-    const unitEntries = await fs.readdir(path.join(paths.libraryDir, "content-units"), { withFileTypes: true });
-    const occupiedIds = [
-      ...indexedItems.map((item) => String(item.id || "")),
-      ...unitEntries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
-    ];
-    const pattern = new RegExp(`^${normalizedPrefix}(\\d+)$`);
-    const occupiedMaximum = occupiedIds.reduce((maximum, id) => {
-      const match = id.match(pattern);
-      return match ? Math.max(maximum, Number(match[1]) || 0) : maximum;
-    }, 0);
-    const currentCounter = Number(current.contentIdCounters?.[normalizedPrefix]) || 0;
-    const nextNumber = Math.max(currentCounter, occupiedMaximum) + 1;
-    const contentId = `${normalizedPrefix}${String(nextNumber).padStart(6, "0")}`;
-    const next = {
-      ...current,
-      contentIdCounters: {
-        I: Number(current.contentIdCounters?.I) || 0,
-        C: Number(current.contentIdCounters?.C) || 0,
-        [normalizedPrefix]: nextNumber,
-      },
-      storage: undefined,
-      libraryOpen: undefined,
-      sessionId: undefined,
-      revision: undefined,
-      updatedAt: new Date().toISOString(),
-      libraryRevision: (Number(current.libraryRevision) || 1) + 1,
-    };
-    await writeIndex(paths, next, { label: "allocate-id" });
-    await cleanupTempFiles(paths);
-    revision = next.libraryRevision;
-    return { contentId, contentIdCounters: next.contentIdCounters, storage: storage(), revision };
+    try {
+      const current = await readLibrary();
+      await assertExpectedRevision(expectedRevision, current);
+      await ensureFolders(paths);
+      const indexedItems = [
+        ...(current.inspirations || []),
+        ...(current.projects || []),
+        ...(current.archive || []),
+        current.activeProject,
+      ].filter(Boolean);
+      const unitEntries = await fs.readdir(path.join(paths.libraryDir, "content-units"), { withFileTypes: true });
+      const occupiedIds = [
+        ...indexedItems.map((item) => String(item.id || "")),
+        ...unitEntries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
+      ];
+      const pattern = new RegExp(`^${normalizedPrefix}(\\d+)$`);
+      const occupiedMaximum = occupiedIds.reduce((maximum, id) => {
+        const match = id.match(pattern);
+        return match ? Math.max(maximum, Number(match[1]) || 0) : maximum;
+      }, 0);
+      const currentCounter = Number(current.contentIdCounters?.[normalizedPrefix]) || 0;
+      const nextNumber = Math.max(currentCounter, occupiedMaximum) + 1;
+      const contentId = `${normalizedPrefix}${String(nextNumber).padStart(6, "0")}`;
+      const next = {
+        ...current,
+        contentIdCounters: {
+          I: Number(current.contentIdCounters?.I) || 0,
+          C: Number(current.contentIdCounters?.C) || 0,
+          [normalizedPrefix]: nextNumber,
+        },
+        storage: undefined,
+        libraryOpen: undefined,
+        sessionId: undefined,
+        revision: undefined,
+        updatedAt: new Date().toISOString(),
+        libraryRevision: (Number(current.libraryRevision) || 1) + 1,
+      };
+      await writeIndex(paths, next, { label: "allocate-id" });
+      await cleanupTempFiles(paths);
+      revision = next.libraryRevision;
+      return { contentId, contentIdCounters: next.contentIdCounters, storage: storage(), revision };
+    } finally {
+      await releaseWriteLease();
+    }
   }
 
   function allocateContentId(prefix, expectedSessionId = "", expectedRevision = "") {
@@ -766,36 +781,40 @@ export function createLibraryManager(options = {}) {
     if (action === "rename") {
       const current = requireActive(payload.sessionId || "");
       await ensureWriteLease(current);
-      const nextName = normalizedLibraryName(payload.name);
-      if (nextName === current.libraryName) return readLibrary();
-      const nextPaths = pathsFor(path.join(current.root, nextName));
-      const collision = await fs.stat(nextPaths.libraryDir).catch(() => null);
-      if (collision) throw libraryError("同一位置已经存在这个名称", 409);
-      await fs.rename(current.libraryDir, nextPaths.libraryDir);
-      await writeLease.release();
-      leaseLibraryDir = "";
-      activePaths = nextPaths;
-      sessionId = randomUUID();
-      revision += 1;
+      let nextPaths = null;
+      let renamed = false;
       try {
+        const nextName = normalizedLibraryName(payload.name);
+        if (nextName === current.libraryName) return readLibrary();
+        nextPaths = pathsFor(path.join(current.root, nextName));
+        const collision = await fs.stat(nextPaths.libraryDir).catch(() => null);
+        if (collision) throw libraryError("同一位置已经存在这个名称", 409);
+        await fs.rename(current.libraryDir, nextPaths.libraryDir);
+        renamed = true;
+        await releaseWriteLease();
+        activePaths = nextPaths;
+        sessionId = randomUUID();
+        revision += 1;
         const data = await readLibrary();
         const persisted = { ...data, storage: undefined, libraryOpen: undefined, sessionId: undefined, revision: undefined, libraryName: nextName, updatedAt: new Date().toISOString() };
-        await ensureLeaseConfigured(nextPaths);
+        await ensureWriteLease(nextPaths);
         persisted.libraryRevision = (Number(persisted.libraryRevision) || 1) + 1;
         await writeIndex(nextPaths, persisted, { label: "rename" });
         revision = persisted.libraryRevision;
+        await notifyStateChange();
+        return readLibrary();
       } catch (error) {
-        await writeLease.release().catch(() => {});
-        leaseLibraryDir = "";
-        await fs.rename(nextPaths.libraryDir, current.libraryDir).catch(() => {});
-        activePaths = pathsFor(current.libraryDir);
-        await ensureLeaseConfigured(activePaths).catch(() => {});
-        sessionId = randomUUID();
-        revision += 1;
+        await releaseWriteLease().catch(() => {});
+        if (renamed && nextPaths) {
+          await fs.rename(nextPaths.libraryDir, current.libraryDir).catch(() => {});
+          activePaths = current;
+          sessionId = randomUUID();
+          revision += 1;
+        }
         throw error;
+      } finally {
+        await releaseWriteLease();
       }
-      await notifyStateChange();
-      return readLibrary();
     }
     throw libraryError("未知的资料库操作");
   }

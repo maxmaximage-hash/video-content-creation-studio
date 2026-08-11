@@ -53,6 +53,7 @@ import {
   libraryRelativePath,
   startNativeFileDrag,
 } from "../../services/project-media.js";
+import { eagleMediaSource } from "../../services/eagle-media.js";
 import "./queue.css";
 
 const VIDEO_ACCEPT = "video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm";
@@ -408,6 +409,7 @@ function QueueMediaCard({
   const [aspectRatio, setAspectRatio] = useState(16 / 9);
   const [fileDragActive, setFileDragActive] = useState(false);
   const relativePath = libraryRelativePath(media);
+  const mediaSrc = media?.src || eagleMediaSource(media);
   const available = state === "available";
   const nativeDraggable = available && canStartNativeFileDrag(media);
   const menuTarget = { projectId, relativePath, scope, label, state };
@@ -548,10 +550,10 @@ function QueueMediaCard({
       }}
     >
       <div className="queue-media-viewport">
-        {available && media.src ? (
+        {available && mediaSrc ? (
           <video
             ref={videoRef}
-            src={media.src}
+            src={mediaSrc}
             preload="metadata"
             playsInline
             onLoadedMetadata={(event) => {
@@ -1007,8 +1009,8 @@ export function QueuePage({
 
   const statusSignature = useMemo(() => JSON.stringify(projects.map((project) => ({
     id: project.id,
-    covers: projectCoverCandidates(project).map((cover) => libraryRelativePath(cover)),
-    media: [...projectOriginalMediaItems(project), ...projectFinishedVideos(project)].map((media) => libraryRelativePath(media)),
+    covers: projectCoverCandidates(project).map((cover) => libraryRelativePath(cover) || cover.eagleItemId || ""),
+    media: [...projectOriginalMediaItems(project), ...projectFinishedVideos(project)].map((media) => libraryRelativePath(media) || media.eagleItemId || ""),
   }))), [projects]);
 
   useEffect(() => {
@@ -1021,13 +1023,17 @@ export function QueuePage({
           ...projectCoverCandidates(project).map((cover) => ({
             key: `cover:${cover.id}`,
             relativePath: libraryRelativePath(cover),
+            eagleItemId: cover.eagleItemId || "",
+            eagleFolderId: cover.eagleFolderId || "",
             scope: "cover",
-          })).filter((asset) => asset.relativePath),
+          })).filter((asset) => asset.relativePath || asset.eagleItemId),
           ...[...projectOriginalMediaItems(project), ...projectFinishedVideos(project)].map((media) => ({
             key: `media:${media.id}`,
             relativePath: libraryRelativePath(media),
+            eagleItemId: media.eagleItemId || "",
+            eagleFolderId: media.eagleFolderId || "",
             scope: media.role === "source_video" ? "source_video" : "finished_video",
-          })).filter((asset) => asset.relativePath),
+          })).filter((asset) => asset.relativePath || asset.eagleItemId),
         ];
         try {
           const result = await fetchProjectAssetStates({
