@@ -1216,7 +1216,7 @@ async function recoverContentUnitImages({ libraryManager, sessionId, contentId }
   }, sessionId || "");
 }
 
-async function downloadVideo(videoUrl, itemId, evidence, libraryManager, referer = "https://www.douyin.com/", sessionHeaders = {}) {
+export async function downloadVideo(videoUrl, itemId, evidence, libraryManager, referer = "https://www.douyin.com/", sessionHeaders = {}) {
   if (!/^https?:\/\//i.test(videoUrl || "") || !itemId) return {};
   const contentId = validateContentId(itemId);
   const library = await libraryManager.readLibrary();
@@ -1229,15 +1229,12 @@ async function downloadVideo(videoUrl, itemId, evidence, libraryManager, referer
     const folderId = existingAsset.eagleFolderId || eagleFolderIdForAsset({ assetRole: "inspiration_video" });
     try {
       const item = await eagleItemInfo(existingAsset.eagleItemId);
-      if (folderId && (!Array.isArray(item.folders) || !item.folders.includes(folderId))) {
-        throw apiError("Eagle 灵感视频未关联目标文件夹", 409);
-      }
       evidence.push(`已复用 Eagle 灵感视频: ${item.id}`);
       return {
         eagleItemId: item.id,
         eagleFolderId: folderId,
         storageProvider: "eagle",
-        videoPreviewUrl: `/api/eagle-media/${encodeURIComponent(item.id)}?folderId=${encodeURIComponent(folderId)}`,
+        videoPreviewUrl: `/api/eagle-media/${encodeURIComponent(item.id)}`,
         mediaAssets: [{
           id: `${contentId}-captured-video`,
           role: "captured_video",
@@ -2970,7 +2967,7 @@ function indexedContentRecords(library = {}) {
   ].filter(Boolean);
 }
 
-async function deleteProjectMediaContent(payload, requestSessionId, libraryManager) {
+export async function deleteProjectMediaContent(payload, requestSessionId, libraryManager) {
   const contentId = validateContentId(payload.projectId);
   if (!contentId.startsWith("C")) throw apiError("只能删除创作内容中的视频", 400);
   const role = canonicalProjectMediaRole(payload.role);

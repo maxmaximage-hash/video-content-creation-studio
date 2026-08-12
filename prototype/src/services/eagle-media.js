@@ -19,10 +19,7 @@ export function eagleFolderIdFrom(item = {}) {
 export function eagleMediaSource(item = {}) {
   const itemId = eagleItemIdFrom(item);
   if (!itemId) return "";
-  const query = new URLSearchParams();
-  const folderId = eagleFolderIdFrom(item);
-  if (folderId) query.set("folderId", folderId);
-  return `/api/eagle-media/${encodeURIComponent(itemId)}${query.size ? `?${query}` : ""}`;
+  return `/api/eagle-media/${encodeURIComponent(itemId)}`;
 }
 
 export async function fetchEagleAnnotation(itemId) {

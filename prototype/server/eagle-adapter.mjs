@@ -235,11 +235,7 @@ export async function serveEagleMedia(req, res, options = {}) {
     const itemId = validateEagleItemId(
       decodeURIComponent(requestUrl.pathname.replace(/^\/api\/eagle-media\/?/, "")) || requestUrl.searchParams.get("itemId"),
     );
-    const expectedFolderId = requestUrl.searchParams.get("folderId") || "";
     const item = await eagleItemInfo(itemId, options);
-    if (expectedFolderId && (!Array.isArray(item.folders) || !item.folders.includes(expectedFolderId))) {
-      throw new EagleUnavailableError("Eagle item 未关联到目标文件夹", 409);
-    }
     const resolved = await resolveEagleOriginalPath(item, options);
     const size = resolved.stat.size;
     const range = parseRange(req.headers.range, size);

@@ -212,6 +212,7 @@ function stateLabel(state) {
 function stateForAsset(asset, states, key) {
   const relativePath = libraryRelativePath(asset);
   if (!asset) return "not_added";
+  if (asset.eagleItemId) return states[key]?.state || "offline";
   if (!relativePath) return asset.src ? "available" : "not_added";
   return states[key]?.state || "offline";
 }

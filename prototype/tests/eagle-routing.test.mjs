@@ -7,6 +7,7 @@ import test from "node:test";
 import { eagleItemInfo, importPathToEagle, serveEagleMedia, setEagleAnnotation } from "../server/eagle-adapter.mjs";
 import { eagleFolderIdForAsset } from "../src/services/eagle-asset-routing.js";
 import { eagleMediaSource } from "../src/services/eagle-media.js";
+import { deleteProjectMediaContent, downloadVideo, projectAssetStates } from "../vite.config.mjs";
 
 test("Eagle folder routing is fixed by account role and asset role", () => {
   assert.equal(eagleFolderIdForAsset({ accountRole: "blogger", assetRole: "cover" }), "MS8R943CBJV6L");
@@ -61,7 +62,7 @@ test("Eagle V1 import is verified by stable item ID and preview keeps only an Ea
   assert.equal(receivedImport.path, "/private/tmp/source.mp4");
   assert.equal(item.id, "MSOTJV3L8V1WM");
   assert.equal(item.folders[0], "MSOSVPR2743KV");
-  assert.equal(eagleMediaSource({ eagleItemId: item.id, eagleFolderId: item.folders[0] }), "/api/eagle-media/MSOTJV3L8V1WM?folderId=MSOSVPR2743KV");
+  assert.equal(eagleMediaSource({ eagleItemId: item.id, eagleFolderId: item.folders[0] }), "/api/eagle-media/MSOTJV3L8V1WM");
 });
 
 test("Eagle item read retries the transient V1 data-field indexing error", async (t) => {
@@ -124,7 +125,7 @@ test("Eagle media endpoint supports HEAD, Range, mime and unavailable states", a
   const mediaServer = http.createServer((req, res) => serveEagleMedia(req, res, apiOptions));
   await new Promise((resolve) => mediaServer.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise((resolve) => mediaServer.close(resolve)));
-  const base = `http://127.0.0.1:${mediaServer.address().port}/api/eagle-media/MSOTJV3L8V1WM?folderId=MSOSVPR2743KV`;
+  const base = `http://127.0.0.1:${mediaServer.address().port}/api/eagle-media/MSOTJV3L8V1WM?folderId=AN-OLD-FOLDER-ID`;
 
   const head = await fetch(base, { method: "HEAD" });
   assert.equal(head.status, 200);
@@ -142,6 +143,130 @@ test("Eagle media endpoint supports HEAD, Range, mime and unavailable states", a
     headers: { range: "bytes=100-120" },
   });
   assert.equal(unavailable.status, 416);
+});
+
+test("Eagle item remains readable after moving to another folder", async (t) => {
+  const previousRoot = process.env.VIDEO_STUDIO_EAGLE_LIBRARY_ROOT;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "eagle-moved-item-test-"));
+  const infoDir = path.join(root, "images", "MSOTJV3L8V1WM.info");
+  await fs.mkdir(infoDir, { recursive: true });
+  const bytes = Buffer.from("moved-folder-item");
+  await fs.writeFile(path.join(infoDir, "moved.mp4"), bytes);
+  process.env.VIDEO_STUDIO_EAGLE_LIBRARY_ROOT = root;
+  const eagleApi = http.createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url?.startsWith("/api/item/info")) {
+      res.end(JSON.stringify({ status: "success", data: {
+        id: "MSOTJV3L8V1WM", size: bytes.length, ext: "mp4", folders: ["MS-MOVED-TO-OTHER-FOLDER"], isDeleted: false,
+      } }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ status: "error", message: "missing" }));
+  });
+  await new Promise((resolve) => eagleApi.listen(0, "127.0.0.1", resolve));
+  const options = { eagleApiBase: `http://127.0.0.1:${eagleApi.address().port}/api` };
+  const mediaServer = http.createServer((req, res) => serveEagleMedia(req, res, options));
+  await new Promise((resolve) => mediaServer.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    if (previousRoot === undefined) delete process.env.VIDEO_STUDIO_EAGLE_LIBRARY_ROOT;
+    else process.env.VIDEO_STUDIO_EAGLE_LIBRARY_ROOT = previousRoot;
+    await new Promise((resolve) => mediaServer.close(resolve));
+    await new Promise((resolve) => eagleApi.close(resolve));
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  const response = await fetch(`http://127.0.0.1:${mediaServer.address().port}/api/eagle-media/MSOTJV3L8V1WM?folderId=MS8R943CBJV6L`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), bytes.toString());
+  assert.equal(eagleMediaSource({ eagleItemId: "MSOTJV3L8V1WM", eagleFolderId: "MS8R943CBJV6L" }), "/api/eagle-media/MSOTJV3L8V1WM");
+});
+
+test("reusing an existing Eagle item ignores its historical folder", async (t) => {
+  const previousApi = process.env.VIDEO_STUDIO_EAGLE_API_BASE;
+  let infoCalls = 0;
+  const server = http.createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url?.startsWith("/api/item/info")) {
+      infoCalls += 1;
+      res.end(JSON.stringify({ status: "success", data: {
+        id: "MSOTJV3L8V1WM", size: 4096, ext: "mp4", folders: ["MS-MOVED"], isDeleted: false,
+      } }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ status: "error", message: "missing" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  process.env.VIDEO_STUDIO_EAGLE_API_BASE = `http://127.0.0.1:${server.address().port}/api`;
+  t.after(async () => {
+    if (previousApi === undefined) delete process.env.VIDEO_STUDIO_EAGLE_API_BASE;
+    else process.env.VIDEO_STUDIO_EAGLE_API_BASE = previousApi;
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const evidence = [];
+  const result = await downloadVideo(
+    "https://video.example/moved.mp4",
+    "I000085",
+    evidence,
+    { readLibrary: async () => ({ inspirations: [{
+      id: "I000085",
+      mediaAssets: [{ eagleItemId: "MSOTJV3L8V1WM", eagleFolderId: "MSOSVPR2743KV" }],
+    }] }) },
+  );
+  assert.equal(infoCalls, 1);
+  assert.equal(result.eagleItemId, "MSOTJV3L8V1WM");
+  assert.equal(result.videoPreviewUrl, "/api/eagle-media/MSOTJV3L8V1WM");
+  assert.equal(result.eagleFolderId, "MSOSVPR2743KV");
+});
+
+test("missing Eagle items return a stable missing state", async (t) => {
+  const previousApi = process.env.VIDEO_STUDIO_EAGLE_API_BASE;
+  const server = http.createServer((req, res) => {
+    res.statusCode = 404;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ status: "error", message: "missing" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  process.env.VIDEO_STUDIO_EAGLE_API_BASE = `http://127.0.0.1:${server.address().port}/api`;
+  t.after(async () => {
+    if (previousApi === undefined) delete process.env.VIDEO_STUDIO_EAGLE_API_BASE;
+    else process.env.VIDEO_STUDIO_EAGLE_API_BASE = previousApi;
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const result = await projectAssetStates({
+    projectId: "C000901",
+    assets: [{ key: "cover", eagleItemId: "MSOTJV3L8V1WM", eagleFolderId: "MS8R943CBJV6L" }],
+  }, "session-1", { requireActive: () => ({ libraryDir: "/tmp" }) });
+  assert.deepEqual(result.states.cover, {
+    state: "missing",
+    eagleItemId: "MSOTJV3L8V1WM",
+    eagleFolderId: "MS8R943CBJV6L",
+  });
+});
+
+test("software media deletion only removes its index and never calls Eagle delete", async () => {
+  const current = {
+    projects: [{ id: "C000901", mediaAssets: [{
+      id: "eagle-video", role: "source_video", accountRole: "blogger", eagleItemId: "MSOTJV3L8V1WM", eagleFolderId: "MSOSLZLAY5RGP",
+    }] }],
+    archive: [],
+    activeProject: null,
+  };
+  let committedResult;
+  const manager = {
+    mutateLibrary: async (mutator) => {
+      const mutation = await mutator({ current, paths: { libraryDir: "/tmp" } });
+      committedResult = mutation.result;
+      return mutation.result;
+    },
+  };
+  const result = await deleteProjectMediaContent({
+    projectId: "C000901", role: "source_video", accountRole: "blogger", mediaId: "eagle-video", eagleItemId: "MSOTJV3L8V1WM",
+  }, "session-1", manager);
+  assert.equal(result.eagleItemId, "MSOTJV3L8V1WM");
+  assert.equal(result.fileDeleted, false);
+  assert.equal(committedResult.fileDeleted, false);
 });
 
 test("Eagle annotation writes and reads back without truncation", async (t) => {

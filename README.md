@@ -2,6 +2,8 @@
 
 一个面向真实内容生产流程的本地优先 macOS 桌面应用。它把抖音、小红书、B 站、视频号、YouTube 和 Instagram 灵感采集、内容创作、双账号素材管理、待发布排期和发布归档放进同一个 `.library` 资料库。
 
+当前发布版本：**1.1.0**
+
 [![macOS CI](https://github.com/maxmaximage-hash/video-content-creation-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/maxmaximage-hash/video-content-creation-studio/actions/workflows/ci.yml)
 
 > 当前公开版本面向 macOS。Apple Silicon 是主要验证平台；Intel Mac 可以从源码构建，但发布前应单独完成真实应用验收。Windows 和 Linux 尚未支持。
@@ -34,7 +36,7 @@
 - 每个平台使用独立的可见 Chromium 登录窗口保存会话。
 - 保存标题、正文、作者/账号、发布时间、已暴露互动数据、封面、图文图片、视频和逐字稿。
 - 逐字稿按“平台字幕 → 腾讯云当月免费额度 → 本地 Whisper”执行，卡片内可展开和复制。
-- 本地媒体进入当前 `.library`，不是依赖远程 URL 的临时预览。
+- 媒体原文件统一存放在 Eagle；`.library` 只保存 Eagle item/folder 关联和展示元数据，不保存媒体副本。
 - 搜索、平台筛选、用户分类和“已关联”筛选可以组合使用。
 - 从灵感直接新建创作，或加入已有创作。
 - 删除灵感时同步删除当前 Library 中对应内容单元，并清理创作引用。
@@ -49,7 +51,7 @@
   - 原素材 · IP 号
   - 成品视频 · 博主号
   - 成品视频 · IP 号
-- 视频支持点击上传和从 Finder 拖入。
+- 视频支持点击上传和从 Finder 拖入，导入成功后保存 Eagle item 关联。
 - 删除视频会删除 Library 中该槽位对应的实体文件。
 
 ![创作工作台](docs/images/creation.png)
@@ -165,7 +167,7 @@ npm run desktop:install
 
 - `I...`：灵感内容。
 - `C...`：自主创作内容。
-- `relativePath`：媒体在 Library 内的相对路径。
+- `relativePath`：仅用于历史本地媒体兼容记录；新媒体使用 Eagle item ID。
 - `role`：`content_image`、`captured_video`、`source_video`、`finished_video` 等角色。
 - `accountRole`：创作视频的 `blogger` 或 `ip` 归属。
 - `canonicalSourceKey`：同一平台作品的稳定去重键。
@@ -177,7 +179,7 @@ npm run desktop:install
 - 仓库不包含任何真实 `.library`、平台 Cookie、NAS 数据、API Key 或用户媒体。
 - 自动化只允许使用项目隔离资料库。
 - 删除媒体和内容单元是不可撤销业务动作，操作前会明确确认。
-- Library 离线或无权限时不会自动删除索引。
+- Eagle item 被移动后仍按 item ID 读取；Eagle item 不可用时显示失效状态。软件删除只解除索引，不删除 Eagle 原文件。
 - 不要把 `auth-browser`、`.library`、测试产物或安装备份提交到 Git。
 
 ## 多电脑与 NAS
