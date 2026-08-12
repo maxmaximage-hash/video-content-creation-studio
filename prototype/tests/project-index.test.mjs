@@ -89,7 +89,7 @@ test("removing one project index preserves its physical files and every other pr
   }
 });
 
-test("stale project index creation rejects without replacing the current library", async () => {
+test("stale project index creation rebases a client-generated ID without replacing the current library", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-studio-index-conflict-"));
   const libraryManager = createLibraryManager({ initialLibraryDir: null, qaMode: true });
   try {
@@ -102,18 +102,16 @@ test("stale project index creation rejects without replacing the current library
     }, opened.storage.sessionId);
     const revision = (await libraryManager.readLibrary()).revision;
 
-    await assert.rejects(
-      createProjectIndex({
-        project: { title: "过期页面新建", covers: [], mediaAssets: [] },
-        sessionId: opened.storage.sessionId,
-        expectedRevision: revision - 1,
-        libraryManager,
-      }),
-      (error) => error.statusCode === 409,
-    );
+    const result = await createProjectIndex({
+      project: { id: "C123456789012345", title: "过期页面新建", covers: [], mediaAssets: [] },
+      sessionId: opened.storage.sessionId,
+      expectedRevision: revision - 1,
+      libraryManager,
+    });
 
     const persisted = await libraryManager.readLibrary();
-    assert.deepEqual(persisted.projects.map((project) => project.id), ["C000901"]);
+    assert.equal(result.createdProject.id, "C123456789012345");
+    assert.deepEqual(persisted.projects.map((project) => project.id), ["C123456789012345", "C000901"]);
   } finally {
     await libraryManager.dispose();
     await fs.rm(root, { recursive: true, force: true });

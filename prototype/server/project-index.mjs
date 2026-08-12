@@ -3,7 +3,8 @@ import path from "node:path";
 
 function contentNumber(id) {
   const match = String(id || "").match(/^C(\d+)$/);
-  return match ? Number(match[1]) || 0 : 0;
+  const value = match ? Number(match[1]) : 0;
+  return Number.isSafeInteger(value) ? value : 0;
 }
 
 function invalidPatch() {
@@ -62,6 +63,16 @@ export async function createProjectIndex({ project = {}, sessionId = "", expecte
     error.statusCode = 400;
     throw error;
   }
+  // New cards arrive with a client-generated numeric ID so the UI can show and
+  // edit them before a NAS round trip. Creation still serializes on the latest
+  // server snapshot and rejects only an actual ID collision.
+  void expectedRevision;
+  const requestedId = String(project.id || "").trim();
+  if (requestedId && !/^C\d{6,}$/.test(requestedId)) {
+    const error = new Error("内容 ID 无效");
+    error.statusCode = 400;
+    throw error;
+  }
   const committed = await libraryManager.mutateLibrary(async ({ current, paths }) => {
     const unitEntries = await fs.readdir(path.join(paths.libraryDir, "content-units"), { withFileTypes: true });
     const occupiedMaximum = [
@@ -71,7 +82,18 @@ export async function createProjectIndex({ project = {}, sessionId = "", expecte
       ...unitEntries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
     ].reduce((maximum, id) => Math.max(maximum, contentNumber(id)), 0);
     const nextNumber = Math.max(Number(current.contentIdCounters?.C) || 0, occupiedMaximum) + 1;
-    const id = `C${String(nextNumber).padStart(6, "0")}`;
+    const occupiedIds = new Set([
+      ...(current.projects || []).map((item) => item.id),
+      ...(current.archive || []).map((item) => item.id),
+      current.activeProject?.id,
+      ...unitEntries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
+    ].filter(Boolean));
+    if (requestedId && occupiedIds.has(requestedId)) {
+      const error = new Error("内容 ID 已被占用");
+      error.statusCode = 409;
+      throw error;
+    }
+    const id = requestedId || `C${String(nextNumber).padStart(6, "0")}`;
     const createdProject = {
       ...project,
       id,
@@ -88,7 +110,7 @@ export async function createProjectIndex({ project = {}, sessionId = "", expecte
       },
       result: { createdProject },
     };
-  }, sessionId, expectedRevision);
+  }, sessionId, "");
   return {
     createdProject: committed.createdProject,
     revision: committed.library.revision,

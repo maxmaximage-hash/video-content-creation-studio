@@ -68,7 +68,11 @@ export async function eagleApiJson(endpoint, { method = "GET", body, options = {
 export async function eagleItemInfo(itemId, options = {}) {
   const id = validateEagleItemId(itemId);
   let lastError = null;
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  // Eagle creates the item record before it has copied an addFromPath source.
+  // Keep the temporary source available until its item can be read back.
+  const maxAttempts = Math.max(1, Number(options.eagleItemInfoAttempts) || 8);
+  const retryDelayMs = Math.max(50, Number(options.eagleItemInfoRetryDelayMs) || 500);
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const result = await eagleApiJson(`/item/info?id=${encodeURIComponent(id)}`, { options });
       const item = result.data;
@@ -77,8 +81,8 @@ export async function eagleItemInfo(itemId, options = {}) {
     } catch (error) {
       lastError = error;
       const isAsyncImportWindow = error?.statusCode === 500 && /File does not exist|文件不存在/i.test(error.message || "");
-      if (!isAsyncImportWindow || attempt === 7) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      if (!isAsyncImportWindow || attempt === maxAttempts - 1) throw error;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     }
   }
   throw lastError || new EagleUnavailableError("Eagle 文件不可用/重新关联", 404);

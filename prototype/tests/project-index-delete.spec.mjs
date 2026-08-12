@@ -208,11 +208,14 @@ test("failed queued delete restores the card instead of leaving a phantom remova
   await seedQueueProjects(request, [
     { id: "C001103", title: "失败时恢复", body: "", covers: [], mediaAssets: [] },
   ]);
-  await page.route("**/api/projects/C001103/index", (route) => route.fulfill({
-    status: 500,
-    contentType: "application/json",
-    body: JSON.stringify({ error: "模拟 NAS 提交失败" }),
-  }));
+  await page.route("**/api/projects/C001103/index", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "模拟 NAS 提交失败" }),
+    });
+  });
   await page.goto("/");
   await page.getByRole("button", { name: "内容库" }).click();
   const card = page.locator('[data-project-id="C001103"]');
@@ -277,4 +280,105 @@ test("missing legacy local cover uses a stable placeholder instead of a broken i
   await expect(card.getByRole("img", { name: "封面不可用" })).toBeVisible({ timeout: 5000 });
   await expect(card.locator(".queue-cover-item img")).toHaveCount(0);
   await expect(card).not.toContainText("文件缺失");
+});
+
+test("new content appears immediately and stays editable while its atomic create is delayed", async ({ page, request }) => {
+  await seedQueueProjects(request, []);
+  let submittedProject = null;
+  await page.route("**/api/projects/index", async (route) => {
+    submittedProject = route.request().postDataJSON().project;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ createdProject: submittedProject, revision: 801 }),
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "内容库" }).click();
+  await page.getByRole("button", { name: "新建第一条内容", exact: true }).click();
+  const card = page.locator("[data-project-id]");
+  await expect(card).toHaveCount(1, { timeout: 500 });
+  const id = await card.getAttribute("data-project-id");
+  expect(id).toMatch(/^C\d{6,}$/);
+  const title = card.getByLabel("博主号标题");
+  await expect(title).toBeFocused();
+  await title.fill("延迟创建时也能编辑");
+  await expect(title).toHaveValue("延迟创建时也能编辑");
+  await page.waitForTimeout(2100);
+  await expect(card.getByLabel("博主号标题")).toHaveValue("延迟创建时也能编辑");
+  await expect(page.locator(".toast")).toContainText("已新建");
+});
+
+test("failed optimistic content create rolls its card back", async ({ page, request }) => {
+  await seedQueueProjects(request, []);
+  await page.route("**/api/projects/index", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "模拟 NAS 写入失败" }),
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "内容库" }).click();
+  await page.getByRole("button", { name: "新建第一条内容", exact: true }).click();
+  await expect(page.locator("[data-project-id]")).toHaveCount(1, { timeout: 500 });
+  await expect(page.locator("[data-project-id]")).toHaveCount(0);
+  await expect(page.locator(".toast")).toContainText("新建失败，已撤回内容");
+});
+
+test("create immediately after delete does not wait for the delete request", async ({ page, request }) => {
+  await seedQueueProjects(request, [{ id: "C001107", title: "先删除后新建", body: "", covers: [], mediaAssets: [] }]);
+  let createdProject = null;
+  await page.route("**/api/projects/C001107/index", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ removedProjectId: "C001107", filesPreserved: true, revision: 810, reconciledProjects: [] }) });
+  });
+  await page.route("**/api/projects/index", (route) => {
+    createdProject = route.request().postDataJSON().project;
+    return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ createdProject, revision: 811 }) });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "内容库" }).click();
+  const deleted = page.locator('[data-project-id="C001107"]');
+  page.once("dialog", (dialog) => dialog.accept());
+  await deleted.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(deleted).toHaveCount(0, { timeout: 500 });
+  await page.getByRole("button", { name: "新建第一条内容", exact: true }).click();
+  await expect(page.locator("[data-project-id]")).toHaveCount(1, { timeout: 500 });
+  expect(await page.locator("[data-project-id]").getAttribute("data-project-id")).not.toBe("C001107");
+});
+
+test("inspiration hover preview keeps sound enabled by default", async ({ page, request }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(HTMLMediaElement.prototype, "play", {
+      configurable: true,
+      value() { return Promise.resolve(); },
+    });
+  });
+  const current = await (await request.get("/api/library")).json();
+  const response = await request.post("/api/library", { data: persistedLibrary(current, {
+    projects: [],
+    archive: [],
+    activeProject: null,
+    inspirations: [{
+      id: "I001107",
+      title: "有声悬停预览",
+      platform: "抖音",
+      contentType: "video",
+      videoPreviewUrl: "https://example.invalid/preview.mp4",
+      covers: [],
+      mediaAssets: [],
+    }],
+  }) });
+  expect(response.ok()).toBeTruthy();
+  await page.goto("/");
+  const card = page.locator('[data-inspiration-id="I001107"]');
+  const video = card.locator("video");
+  await expect(video).toHaveJSProperty("muted", false);
+  await expect(video).toHaveJSProperty("volume", 1);
+  await card.locator(".media-hover-surface").hover({ force: true });
+  await expect(video).toHaveJSProperty("muted", false);
+  await expect(video).toHaveJSProperty("volume", 1);
 });

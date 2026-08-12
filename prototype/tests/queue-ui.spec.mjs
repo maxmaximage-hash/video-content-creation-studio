@@ -212,7 +212,7 @@ test("内容库空态和页头都能新建内容并自动保存", async ({ page,
   const firstCard = page.locator("[data-project-id]").first();
   await expect(firstCard).toBeVisible();
   const firstId = await firstCard.getAttribute("data-project-id");
-  expect(firstId).toMatch(/^C\d{6}$/);
+  expect(firstId).toMatch(/^C\d{6,}$/);
   await expect.poll(() => order(page)).toEqual([firstId]);
   await expect(firstCard.locator('[data-account-role="blogger"]')).toBeVisible();
   await expect(firstCard.locator('[data-account-role="ip"]')).toBeVisible();
@@ -256,7 +256,7 @@ test("内容库空态和页头都能新建内容并自动保存", async ({ page,
   await headerCreate.click();
   await expect(page.locator("[data-project-id]")).toHaveCount(2);
   const secondId = await page.locator("[data-project-id]").first().getAttribute("data-project-id");
-  expect(secondId).toMatch(/^C\d{6}$/);
+  expect(secondId).toMatch(/^C\d{6,}$/);
   expect(secondId).not.toBe(firstId);
   await expect.poll(() => order(page)).toEqual([secondId, firstId]);
   await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe("博主号标题");

@@ -70,6 +70,14 @@ function formatNow() {
   }).format(new Date()).replaceAll("/", ".");
 }
 
+function optimisticContentId() {
+  const seconds = Math.floor(Date.now() / 1000);
+  const random = globalThis.crypto?.getRandomValues
+    ? globalThis.crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000
+    : Math.floor(Math.random() * 1_000_000);
+  return `C${seconds}${String(random).padStart(6, "0")}`;
+}
+
 function categoryValue(item) {
   const value = item?.category || "";
   if (legacyPresetCategories.has(value) && !item?.categoryAssignedByUser) return "";
@@ -540,7 +548,7 @@ function MediaPreview({ item, compact = false }) {
   const videoRef = useRef(null);
   const manualPausedRef = useRef(false);
   const hoverTimerRef = useRef(null);
-  const autoMutedRef = useRef(false);
+  const userMutedRef = useRef(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [mediaDuration, setMediaDuration] = useState(0);
   const [isScrubbing, setIsScrubbing] = useState(false);
@@ -560,7 +568,7 @@ function MediaPreview({ item, compact = false }) {
     return () => clearTimeout(hoverTimerRef.current);
   }, [videoSrc]);
 
-  const play = async ({ allowMutedFallback = false } = {}) => {
+  const play = async () => {
     const video = videoRef.current;
     if (!video) return;
     clearTimeout(hoverTimerRef.current);
@@ -569,16 +577,7 @@ function MediaPreview({ item, compact = false }) {
     });
     try {
       await video.play();
-    } catch (error) {
-      if (allowMutedFallback && error?.name === "NotAllowedError") {
-        video.muted = true;
-        autoMutedRef.current = true;
-        setIsMuted(true);
-        try {
-          await video.play();
-          return;
-        } catch {}
-      }
+    } catch {
       setIsPlaying(false);
     }
   };
@@ -600,11 +599,6 @@ function MediaPreview({ item, compact = false }) {
     clearTimeout(hoverTimerRef.current);
     if (!isPlaying) {
       manualPausedRef.current = false;
-      if (autoMutedRef.current) {
-        autoMutedRef.current = false;
-        videoRef.current.muted = false;
-        setIsMuted(false);
-      }
       void play();
     } else {
       manualPausedRef.current = true;
@@ -614,6 +608,7 @@ function MediaPreview({ item, compact = false }) {
   const toggleMuted = () => {
     setIsMuted((current) => {
       const next = !current;
+      userMutedRef.current = next;
       if (videoRef.current) videoRef.current.muted = next;
       return next;
     });
@@ -628,6 +623,7 @@ function MediaPreview({ item, compact = false }) {
     if (!video) return;
     if (Number.isFinite(video.duration) && video.duration > 0) setMediaDuration(video.duration);
     video.playbackRate = playbackRate;
+    if (!userMutedRef.current) video.volume = 1;
   };
   const updateTime = () => {
     if (isScrubbing || !videoRef.current) return;
@@ -698,10 +694,10 @@ function MediaPreview({ item, compact = false }) {
               clearTimeout(hoverTimerRef.current);
               hoverTimerRef.current = setTimeout(() => {
                 if (!manualPausedRef.current && videoRef.current) {
-                  videoRef.current.muted = true;
-                  autoMutedRef.current = true;
-                  setIsMuted(true);
-                  void play({ allowMutedFallback: true });
+                  videoRef.current.muted = userMutedRef.current;
+                  if (!userMutedRef.current) videoRef.current.volume = 1;
+                  setIsMuted(userMutedRef.current);
+                  void play();
                 }
               }, 180);
             }}
@@ -797,6 +793,7 @@ export function App() {
   const [libraryRevision, setLibraryRevision] = useState(1);
   const [deletingInspirationIds, setDeletingInspirationIds] = useState(() => new Set());
   const [deletingProjectIds, setDeletingProjectIds] = useState(() => new Set());
+  const [creatingContentIds, setCreatingContentIds] = useState(() => new Set());
   const legacyCategoriesRef = useRef([]);
   const userCategoriesStoredRef = useRef(false);
   const lastSavedSnapshotRef = useRef("");
@@ -809,7 +806,8 @@ export function App() {
   const autosaveTimerRef = useRef(null);
   const deletingInspirationIdsRef = useRef(new Set());
   const deletingProjectIdsRef = useRef(new Set());
-  const projectDeleteQueueRef = useRef(Promise.resolve());
+  const creatingContentIdsRef = useRef(new Set());
+  const projectIndexMutationQueueRef = useRef(Promise.resolve());
   const inspirationItemsRef = useRef(inspirationItems);
   const pendingReferencePatchesRef = useRef(new Map());
   const referencePatchTimersRef = useRef(new Map());
@@ -826,6 +824,7 @@ export function App() {
   libraryRevisionRef.current = libraryRevision;
   deletingInspirationIdsRef.current = deletingInspirationIds;
   deletingProjectIdsRef.current = deletingProjectIds;
+  creatingContentIdsRef.current = creatingContentIds;
   const editingProject = editingProjectId
     ? projects.find((project) => project.id === editingProjectId) || null
     : null;
@@ -851,6 +850,8 @@ export function App() {
       setDeletingInspirationIds(new Set());
       deletingProjectIdsRef.current = new Set();
       setDeletingProjectIds(new Set());
+      creatingContentIdsRef.current = new Set();
+      setCreatingContentIds(new Set());
       lastSavedSnapshotRef.current = "";
       setLibraryLoaded(true);
       setLibraryWritable(false);
@@ -892,6 +893,8 @@ export function App() {
     setDeletingInspirationIds(new Set());
     deletingProjectIdsRef.current = new Set();
     setDeletingProjectIds(new Set());
+    creatingContentIdsRef.current = new Set();
+    setCreatingContentIds(new Set());
     lastSavedSnapshotRef.current = stableLibrarySnapshot(librarySavePayload({
       legacyCategories: library.legacyCategories,
       categories: library.categories,
@@ -952,7 +955,7 @@ export function App() {
 
   useEffect(() => {
     if (!libraryLoaded || !libraryWritable) return undefined;
-    if (deletingInspirationIds.size || deletingProjectIds.size) {
+    if (deletingInspirationIds.size || deletingProjectIds.size || creatingContentIds.size) {
       setSaveState("saving");
       return undefined;
     }
@@ -972,7 +975,7 @@ export function App() {
     }
     setSaveState("saving");
     autosaveTimerRef.current = window.setTimeout(() => {
-      if (deletingInspirationIdsRef.current.size || deletingProjectIdsRef.current.size || saveInFlightRef.current) return;
+      if (deletingInspirationIdsRef.current.size || deletingProjectIdsRef.current.size || creatingContentIdsRef.current.size || saveInFlightRef.current) return;
       const requestRevision = libraryRevisionRef.current;
       const request = fetch("/api/library", {
         method: "POST",
@@ -1016,7 +1019,7 @@ export function App() {
       saveInFlightRef.current = request;
     }, 360);
     return () => window.clearTimeout(autosaveTimerRef.current);
-  }, [libraryLoaded, libraryWritable, categories, inspirationItems, projects, archiveItems, activeProject, storage?.sessionId, libraryRevision, deletingInspirationIds, deletingProjectIds]);
+  }, [libraryLoaded, libraryWritable, categories, inspirationItems, projects, archiveItems, activeProject, storage?.sessionId, libraryRevision, deletingInspirationIds, deletingProjectIds, creatingContentIds]);
 
   const openAuth = async (platform) => {
     notify("正在打开专用登录窗口");
@@ -1311,55 +1314,61 @@ export function App() {
     if (project) notify(`已新建 ${project.id}`);
   };
 
-  const createContentIndex = async () => {
-    if (creatingProjectRef.current) {
-      notify("正在新建内容，请稍候");
-      return null;
-    }
-    creatingProjectRef.current = true;
-    try {
-      const saved = await persistCurrentLibrary();
-      const projectTemplate = queueProject(makeOriginalProject({
-        id: "",
-        createdAt: formatNow(),
-      }));
-      const response = await fetch("/api/projects/index", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-library-session-id": storage?.sessionId || "",
-          "x-library-revision": String(libraryRevisionRef.current),
-        },
-        body: JSON.stringify({ project: projectTemplate }),
-      });
-      const result = await response.json();
-      if (!response.ok || result.error || !result.createdProject) {
-        const error = new Error(result.error || "新建内容失败");
-        error.status = response.status;
-        error.data = result;
-        throw error;
+  const createContentIndex = () => {
+    const project = queueProject(makeOriginalProject({ id: optimisticContentId(), createdAt: formatNow() }));
+    const nextCreatingIds = new Set(creatingContentIdsRef.current);
+    nextCreatingIds.add(project.id);
+    creatingContentIdsRef.current = nextCreatingIds;
+    setCreatingContentIds(nextCreatingIds);
+    window.clearTimeout(autosaveTimerRef.current);
+    projectsRef.current = [project, ...projectsRef.current];
+    setProjects(projectsRef.current);
+    setSaveState("saving");
+
+    const finishCreate = () => {
+      const next = new Set(creatingContentIdsRef.current);
+      next.delete(project.id);
+      creatingContentIdsRef.current = next;
+      setCreatingContentIds(next);
+    };
+    const commitCreate = async () => {
+      try {
+        const response = await fetch("/api/projects/index", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-library-session-id": storage?.sessionId || "",
+            "x-library-revision": String(libraryRevisionRef.current),
+          },
+          body: JSON.stringify({ project }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error || result.createdProject?.id !== project.id) throw new Error(result.error || "新建内容失败");
+        if (result.storage) setStorage(result.storage);
+        if (result.revision) {
+          libraryRevisionRef.current = result.revision;
+          setLibraryRevision(result.revision);
+        }
+        const savedPayload = savedLibraryPayload(lastSavedSnapshotRef.current);
+        if (savedPayload) {
+          lastSavedSnapshotRef.current = stableLibrarySnapshot({
+            ...savedPayload,
+            projects: [result.createdProject, ...(savedPayload.projects || []).filter((item) => item.id !== project.id)],
+          });
+        }
+        setSaveState("saved");
+        notify(`已新建 ${project.id}，可以直接填写内容`);
+      } catch (error) {
+        projectsRef.current = projectsRef.current.filter((item) => item.id !== project.id);
+        setProjects(projectsRef.current);
+        notify(`新建失败，已撤回内容：${error.message || "新建内容失败"}`);
+      } finally {
+        finishCreate();
       }
-      const project = result.createdProject;
-      const nextProjects = [project, ...saved.payload.projects.filter((item) => item.id !== project.id)];
-      if (result.storage) setStorage(result.storage);
-      if (result.revision) {
-        libraryRevisionRef.current = result.revision;
-        setLibraryRevision(result.revision);
-      }
-      lastSavedSnapshotRef.current = stableLibrarySnapshot({
-        ...saved.payload,
-        projects: nextProjects,
-      });
-      setProjects(nextProjects);
-      setSaveState("saved");
-      notify(`已新建 ${project.id}，可以直接填写内容`);
-      return project;
-    } catch (error) {
-      notify(error.message || "新建内容失败");
-      return null;
-    } finally {
-      creatingProjectRef.current = false;
-    }
+    };
+    const queued = projectIndexMutationQueueRef.current.then(commitCreate, commitCreate);
+    projectIndexMutationQueueRef.current = queued.catch(() => {});
+    return project;
   };
 
   const addToExisting = (project, inspiration) => {
@@ -1726,8 +1735,8 @@ export function App() {
         finishDelete();
       }
     };
-    const queued = projectDeleteQueueRef.current.then(commitDelete, commitDelete);
-    projectDeleteQueueRef.current = queued.catch(() => {});
+    const queued = projectIndexMutationQueueRef.current.then(commitDelete, commitDelete);
+    projectIndexMutationQueueRef.current = queued.catch(() => {});
     return queued;
   };
 

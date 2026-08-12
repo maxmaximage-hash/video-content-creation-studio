@@ -2645,7 +2645,11 @@ function safeFilePart(value, fallback) {
 }
 
 async function writeTempUploadFile(source, originalName) {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "video-studio-eagle-upload-"));
+  // Eagle's addFromPath process cannot reliably access the per-process
+  // /var/folders temporary directory. Use the shared macOS temp root and
+  // remove this directory immediately after Eagle confirms or rejects import.
+  const tempRoot = process.env.VIDEO_STUDIO_EAGLE_TEMP_ROOT || "/private/tmp";
+  const tempDir = await fs.mkdtemp(path.join(tempRoot, "video-studio-eagle-upload-"));
   const tempPath = path.join(tempDir, safeFilePart(path.basename(originalName || "upload.bin"), "upload"));
   let size = 0;
   const meter = new Transform({
@@ -2675,7 +2679,10 @@ async function verifiedEagleImport({ tempPath, folderId, originalName, contentId
       ...(accountRole ? [`account:${accountRole}`] : []),
     ],
   });
-  const item = await eagleItemInfo(imported.id);
+  const item = await eagleItemInfo(imported.id, {
+    eagleItemInfoAttempts: 240,
+    eagleItemInfoRetryDelayMs: 500,
+  });
   if (!Array.isArray(item.folders) || !item.folders.includes(folderId)) {
     throw apiError("Eagle 导入后未关联目标文件夹", 502);
   }
