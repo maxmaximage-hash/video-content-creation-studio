@@ -2,7 +2,7 @@
 
 一个面向真实内容生产流程的本地优先 macOS 桌面应用。它把抖音、小红书、B 站、视频号、YouTube 和 Instagram 灵感采集、内容创作、双账号素材管理、创作台整理和完成归档放进同一个 `.library` 资料库。
 
-当前发布版本：**1.1.0**
+当前用户版本：**V1.1**（内部构建版本 `1.1.0`）
 
 [![macOS CI](https://github.com/maxmaximage-hash/video-content-creation-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/maxmaximage-hash/video-content-creation-studio/actions/workflows/ci.yml)
 
@@ -219,11 +219,13 @@ npm run docs:screenshots   # 重新生成脱敏文档截图
 
 ## 版本与 GitHub 同步
 
-项目按版本批次发布，不为每个小 bug 单独发布：
+项目按版本批次发布，用户可见版本固定为 `VX.Y` 两段格式：
 
 - 日常改动进入 `codex/vX.Y.Z-workbench` 开发分支，并继续默认安装到本机真实应用验收。
 - `main` 只保留已经完成真实应用验收的稳定版本。
-- 一轮改动完成后统一更新版本号和 Changelog，再合并、推送并创建 `vX.Y.Z` 标签。
+- 每轮小修递增后一位，例如 `V1.0`、`V1.1`；累计 10 轮或发生重大调整时进入下一前位，例如 `V2.0`。
+- Electron、npm 和 Git 标签内部仍使用三段稳定格式，例如用户版本 `V1.1` 对应内部版本 `1.1.0`。
+- 一轮改动完成后统一更新内部版本号和 Changelog，再合并、推送并创建 `vX.Y.Z` 标签。
 - 标签会自动构建 Apple Silicon 应用并创建 GitHub Release。
 - 应用导航栏显示版本号、Git commit 和未提交状态，便于确认本机安装包对应哪份源码。
 

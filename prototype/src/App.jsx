@@ -53,7 +53,8 @@ import {
 
 const defaultCategories = [];
 const legacyPresetCategories = new Set(["情感", "展示面", "认知", "教程"]);
-const appBuildLabel = `v${__APP_VERSION__} · ${__APP_COMMIT__}${__APP_DIRTY__ ? " · 未提交" : ""}`;
+const appVersionLabel = `V${String(__APP_VERSION__).split(".").slice(0, 2).join(".")}`;
+const appBuildLabel = `${appVersionLabel} · ${__APP_COMMIT__}${__APP_DIRTY__ ? " · 未提交" : ""}`;
 
 const navItems = [
   { id: "inspirations", label: "灵感库", icon: Lightbulb },
@@ -453,7 +454,7 @@ function AppSidebar({ page, setPage, queueCount, archiveCount, open, setOpen, st
         <div className="brand-mark"><img src="/app-icon.png" alt="" /></div>
         <div className="brand-copy">
           <strong>Video Hub</strong>
-          <span>{`v${__APP_VERSION__}`}</span>
+          <span>{appVersionLabel}</span>
         </div>
         <IconButton label="收起导航" className="mobile-close" onClick={() => setOpen(false)}>
           <X size={18} />
