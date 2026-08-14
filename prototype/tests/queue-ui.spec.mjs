@@ -267,7 +267,7 @@ test("正文格式规整支持预览确认、撤销、幂等和自动保存", as
   const card = page.locator('[data-project-id="C000127"]');
   const body = card.getByLabel("博主号正文", { exact: true });
   const original = "> **王的姿态**  \n\n\n保留 > 和 *普通星号*\n数字 123  ";
-  const formatted = "王的姿态\n\n保留 > 和 *普通星号*\n数字 123";
+  const formatted = "王的姿态\n保留 > 和 *普通星号*\n数字 123";
 
   await body.fill(original);
   const formatButton = card.getByRole("button", { name: "规整博主号正文格式", exact: true });
@@ -306,7 +306,7 @@ test("正文规整后立即完成仍归档最新内容", async ({ page, request 
   await openQueue(page);
   const card = page.locator('[data-project-id="C000127"]');
   const original = "> **立即归档正文**   \n\n\n> 数字 2026 保持不变   ";
-  const formatted = "立即归档正文\n\n数字 2026 保持不变";
+  const formatted = "立即归档正文\n数字 2026 保持不变";
 
   await card.getByLabel("博主号正文", { exact: true }).fill(original);
   await card.getByRole("button", { name: "规整博主号正文格式", exact: true }).click();
