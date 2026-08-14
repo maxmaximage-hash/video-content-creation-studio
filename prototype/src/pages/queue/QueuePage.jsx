@@ -102,20 +102,33 @@ function QueueHeader({ creatingContent, onCreateContent, setSidebarOpen }) {
 
 function BodyFormatPreviewModal({ preview, onClose, onConfirm }) {
   if (!preview) return null;
+  const changed = preview.original !== preview.formatted;
   return (
     <div className="queue-cover-lightbox" role="presentation" onMouseDown={onClose}>
       <section className="queue-format-modal" role="dialog" aria-modal="true" aria-label="格式规整预览" onMouseDown={(event) => event.stopPropagation()}>
         <header>
-          <div><span>仅清理格式，正文内容不变</span><h2>{preview.accountLabel}正文格式规整</h2></div>
+          <div><span>{changed ? "仅清理格式，正文内容不变" : "检查完成"}</span><h2>{preview.accountLabel}正文格式规整</h2></div>
           <QueueIconButton label="关闭格式规整预览" onClick={onClose}><X size={18} /></QueueIconButton>
         </header>
-        <div className="queue-format-compare">
-          <label><span>原文</span><textarea value={preview.original} readOnly /></label>
-          <label><span>规整后</span><textarea value={preview.formatted} readOnly /></label>
-        </div>
+        {changed ? (
+          <div className="queue-format-compare">
+            <label><span>原文</span><textarea value={preview.original} readOnly /></label>
+            <label><span>规整后</span><textarea value={preview.formatted} readOnly /></label>
+          </div>
+        ) : (
+          <div className="queue-format-unchanged" role="status">
+            <CheckCircle2 size={24} />
+            <strong>当前正文无需调整</strong>
+            <span>没有检测到需要清理的格式。</span>
+          </div>
+        )}
         <footer>
-          <button type="button" className="quiet-button" onClick={onClose}>取消</button>
-          <button type="button" className="primary-button" onClick={onConfirm}><WandSparkles size={15} />确认规整</button>
+          {changed ? (
+            <>
+              <button type="button" className="quiet-button" onClick={onClose}>取消</button>
+              <button type="button" className="primary-button" onClick={onConfirm}><WandSparkles size={15} />确认规整</button>
+            </>
+          ) : <button type="button" className="primary-button" onClick={onClose}>关闭</button>}
         </footer>
       </section>
     </div>
@@ -699,7 +712,7 @@ function AccountContentColumn({
           onClick={() => onFormatBody(project, accountRole, copy.body)}
           disabled={!copy.body}
         >
-          <WandSparkles size={14} />格式规整
+          <WandSparkles size={16} />
         </button>
         {canUndoBodyFormat && (
           <QueueIconButton label={`撤销${accountLabel}正文格式规整`} onClick={() => onUndoBodyFormat(project, accountRole)}>
@@ -1071,10 +1084,6 @@ export function QueuePage({
 
   const previewBodyFormat = (project, accountRole, body) => {
     const formatted = formatBodyText(body);
-    if (formatted === body) {
-      notify("正文格式已经规整");
-      return;
-    }
     const accountLabel = CONTENT_ACCOUNT_VARIANTS.find((item) => item.id === accountRole)?.label || "正文";
     setFormatPreview({ projectId: project.id, accountRole, accountLabel, original: body, formatted });
   };
@@ -1082,6 +1091,10 @@ export function QueuePage({
   const confirmBodyFormat = () => {
     if (!formatPreview) return;
     const { projectId, accountRole, original, formatted } = formatPreview;
+    if (original === formatted) {
+      setFormatPreview(null);
+      return;
+    }
     onUpdateProject(projectId, (current) => updateProjectAccountCopy(current, accountRole, { body: formatted }));
     setFormattedBodyUndo((current) => ({ ...current, [`${projectId}:${accountRole}`]: original }));
     setFormatPreview(null);

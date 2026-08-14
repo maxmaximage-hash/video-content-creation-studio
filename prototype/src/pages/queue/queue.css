@@ -1076,6 +1076,14 @@
   white-space: nowrap;
 }
 
+.queue-phase1 .queue-format-body-button {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+}
+
 .queue-phase1 .queue-format-body-button:hover:not(:disabled),
 .queue-phase1 .queue-complete-button:hover {
   border-color: rgba(214, 179, 106, .7);
@@ -1104,10 +1112,14 @@
 .queue-format-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 16px 18px; }
 .queue-format-compare label { display: grid; gap: 7px; color: #bdbfc6; font-size: 11px; }
 .queue-format-compare textarea { min-height: 260px; resize: vertical; padding: 10px; border: 1px solid rgba(255,255,255,.11); border-radius: 6px; color: #ececf0; background: #121317; line-height: 1.55; }
+.queue-format-unchanged { min-height: 190px; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 24px; color: #cfd0d5; text-align: center; }
+.queue-format-unchanged svg { color: #d6b36a; }
+.queue-format-unchanged strong { color: #f0f0f2; font-size: 16px; }
+.queue-format-unchanged span { color: #9699a1; font-size: 12px; }
 
 @media (max-width: 680px) {
   .queue-format-compare { grid-template-columns: 1fr; }
-  .queue-phase1 .queue-format-body-button { padding: 0 7px; font-size: 10px; }
+  .queue-phase1 .queue-format-body-button { padding: 0; }
 }
 
 .queue-phase1 .queue-account-title-row {

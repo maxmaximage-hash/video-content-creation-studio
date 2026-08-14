@@ -270,7 +270,10 @@ test("正文格式规整支持预览确认、撤销、幂等和自动保存", as
   const formatted = "王的姿态\n\n保留 > 和 *普通星号*\n数字 123";
 
   await body.fill(original);
-  await card.getByRole("button", { name: "规整博主号正文格式", exact: true }).click();
+  const formatButton = card.getByRole("button", { name: "规整博主号正文格式", exact: true });
+  await expect(formatButton).toHaveText("");
+  await expect(formatButton.locator("svg.lucide-wand-sparkles")).toHaveCount(1);
+  await formatButton.click();
   const preview = page.getByRole("dialog", { name: "格式规整预览" });
   await expect(preview.getByLabel("原文")).toHaveValue(original);
   await expect(preview.getByLabel("规整后")).toHaveValue(formatted);
@@ -283,9 +286,12 @@ test("正文格式规整支持预览确认、撤销、幂等和自动保存", as
   await card.getByRole("button", { name: "规整博主号正文格式", exact: true }).click();
   await preview.getByRole("button", { name: "确认规整", exact: true }).click();
   await expect(body).toHaveValue(formatted);
-  await card.getByRole("button", { name: "规整博主号正文格式", exact: true }).click();
+  await formatButton.click();
+  await expect(preview).toBeVisible();
+  await expect(preview.getByText("当前正文无需调整", { exact: true })).toBeVisible();
+  await expect(preview.getByRole("button", { name: "确认规整", exact: true })).toHaveCount(0);
+  await preview.getByRole("button", { name: "关闭", exact: true }).click();
   await expect(preview).toHaveCount(0);
-  await expect(page.locator(".toast")).toContainText("正文格式已经规整");
 
   await expect.poll(async () => {
     const library = await (await request.get("/api/library")).json();
