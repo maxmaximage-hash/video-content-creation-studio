@@ -247,7 +247,7 @@ test("移除一处重复引用仍保持关联，最后一处移除后状态消�
   await page.getByLabel("主导航").getByRole("button", { name: "灵感库", exact: true }).click();
   await expect(inspirationCard(page, "I001002")).toHaveAttribute("data-linked", "true");
 
-  await page.getByLabel("主导航").getByRole("button", { name: /^待发布/ }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: /^创作台/ }).click();
   const queueCard = page.locator('[data-project-id="C001001"]');
   page.once("dialog", (dialog) => dialog.accept());
   await queueCard.getByRole("button", { name: "删除", exact: true }).click();

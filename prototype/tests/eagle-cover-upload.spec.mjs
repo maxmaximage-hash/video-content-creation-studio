@@ -154,7 +154,7 @@ test("内容库 IP 号封面导入 IP Eagle 文件夹后才显示并写入索引
   expect(seed.ok()).toBeTruthy();
 
   await page.goto("/");
-  await page.getByRole("button", { name: "内容库", exact: true }).click();
+  await page.getByRole("button", { name: "创作台", exact: true }).click();
   const ipColumn = page.locator(`[data-project-id="${ipProjectId}"] [data-account-role="ip"]`);
   const chooserPromise = page.waitForEvent("filechooser");
   await ipColumn.getByRole("button", { name: "添加封面", exact: true }).click();

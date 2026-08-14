@@ -17,6 +17,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  CheckCircle2,
   Copy,
   FolderOpen,
   GripVertical,
@@ -27,8 +28,10 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  Undo2,
   Upload,
   Video,
+  WandSparkles,
   X,
 } from "lucide-react";
 import {
@@ -37,9 +40,9 @@ import {
   projectAccountCovers,
   updateProjectAccountCopy,
 } from "./content-variants.js";
+import { formatBodyText } from "./body-format.js";
 import {
   coverSource,
-  isCreationComplete,
   PROJECT_MEDIA_SLOTS,
   projectCoverCandidates,
   projectFinishedVideos,
@@ -74,7 +77,7 @@ function QueueIconButton({ label, children, className = "", onClick, disabled = 
   );
 }
 
-function QueueHeader({ completedCount, creatingContent, onCreateContent, setSidebarOpen }) {
+function QueueHeader({ creatingContent, onCreateContent, setSidebarOpen }) {
   return (
     <header className="page-header">
       <div className="title-row">
@@ -82,9 +85,9 @@ function QueueHeader({ completedCount, creatingContent, onCreateContent, setSide
           <Menu size={20} />
         </QueueIconButton>
         <div>
-          <span className="eyebrow">03 / 内容沉淀</span>
-          <h1>内容库</h1>
-          <p>一个选题同时维护博主号与 IP 号两版内容，序号代表当前整理优先级。</p>
+          <span className="eyebrow">03 / 正在创作</span>
+          <h1>创作台</h1>
+          <p>一个选题同时维护博主号与 IP 号两版内容，完成后会进入归档库。</p>
         </div>
       </div>
       <div className="header-actions queue-header-actions">
@@ -92,9 +95,30 @@ function QueueHeader({ completedCount, creatingContent, onCreateContent, setSide
           {creatingContent ? <RefreshCw size={16} className="spin" /> : <Plus size={16} />}
           {creatingContent ? "正在新建" : "新建内容"}
         </button>
-        <span className="status-pill tone-green">{completedCount} 个创作已完成</span>
       </div>
     </header>
+  );
+}
+
+function BodyFormatPreviewModal({ preview, onClose, onConfirm }) {
+  if (!preview) return null;
+  return (
+    <div className="queue-cover-lightbox" role="presentation" onMouseDown={onClose}>
+      <section className="queue-format-modal" role="dialog" aria-modal="true" aria-label="格式规整预览" onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <div><span>仅清理格式，正文内容不变</span><h2>{preview.accountLabel}正文格式规整</h2></div>
+          <QueueIconButton label="关闭格式规整预览" onClick={onClose}><X size={18} /></QueueIconButton>
+        </header>
+        <div className="queue-format-compare">
+          <label><span>原文</span><textarea value={preview.original} readOnly /></label>
+          <label><span>规整后</span><textarea value={preview.formatted} readOnly /></label>
+        </div>
+        <footer>
+          <button type="button" className="quiet-button" onClick={onClose}>取消</button>
+          <button type="button" className="primary-button" onClick={onConfirm}><WandSparkles size={15} />确认规整</button>
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -636,6 +660,9 @@ function AccountContentColumn({
   onRemoveMedia,
   onOpenMenu,
   uploadingCover,
+  onFormatBody,
+  onUndoBodyFormat,
+  canUndoBodyFormat,
 }) {
   const copy = projectAccountCopy(project, accountRole);
   const covers = projectAccountCovers(project, accountRole, projectCoverCandidates(project));
@@ -664,6 +691,21 @@ function AccountContentColumn({
           aria-label={`${accountLabel}正文`}
           onChange={(event) => updateCopy("body", event.target.value)}
         />
+        <button
+          type="button"
+          className="queue-format-body-button"
+          aria-label={`规整${accountLabel}正文格式`}
+          title="格式规整"
+          onClick={() => onFormatBody(project, accountRole, copy.body)}
+          disabled={!copy.body}
+        >
+          <WandSparkles size={14} />格式规整
+        </button>
+        {canUndoBodyFormat && (
+          <QueueIconButton label={`撤销${accountLabel}正文格式规整`} onClick={() => onUndoBodyFormat(project, accountRole)}>
+            <Undo2 size={15} />
+          </QueueIconButton>
+        )}
         <QueueCopyButton value={copy.body} notify={notify} />
       </div>
       <div className="queue-account-assets">
@@ -740,8 +782,11 @@ function QueueCardContent({
   onRemoveMedia,
   onOpenMenu,
   uploadingCover,
+  onComplete,
+  onFormatBody,
+  onUndoBodyFormat,
+  formattedBodyUndo,
 }) {
-  const completed = isCreationComplete(project);
   const mediaProjection = projectMediaSlotProjection(project);
   const uploads = mediaUploads[project.id] || {};
   const categoryOptions = project.category && !categories.includes(project.category)
@@ -752,7 +797,7 @@ function QueueCardContent({
       <header className="queue-card-header">
         <strong className="queue-card-number" aria-label={`当前顺序 ${index + 1}`}>{String(index + 1).padStart(2, "0")}</strong>
         <div className="queue-card-meta">
-          <span>{completed ? "已完成" : "整理中"}</span>
+          <span>正在创作</span>
           <label className="queue-category-control">
             <span>分类</span>
             <select value={project.category || ""} onChange={(event) => onUpdateProject(project.id, (current) => ({
@@ -766,7 +811,10 @@ function QueueCardContent({
             </select>
           </label>
         </div>
-        <button type="button" className="delete-queue-button" onClick={() => onDelete(project)}><Trash2 size={16} />删除</button>
+        <div className="queue-card-actions">
+          <button type="button" className="queue-complete-button" onClick={() => onComplete(project)}><CheckCircle2 size={16} />完成</button>
+          <button type="button" className="delete-queue-button" onClick={() => onDelete(project)}><Trash2 size={16} />删除</button>
+        </div>
       </header>
       <div className="queue-account-grid">
         {CONTENT_ACCOUNT_VARIANTS.map((variant) => (
@@ -792,6 +840,9 @@ function QueueCardContent({
             onRemoveMedia={onRemoveMedia}
             onOpenMenu={onOpenMenu}
             uploadingCover={uploadingCover}
+            onFormatBody={onFormatBody}
+            onUndoBodyFormat={onUndoBodyFormat}
+            canUndoBodyFormat={Boolean(formattedBodyUndo[`${project.id}:${variant.id}`])}
           />
         ))}
       </div>
@@ -848,7 +899,7 @@ function SortableQueueCard(props) {
       data-project-id={project.id}
       role="group"
       tabIndex={0}
-      aria-label={`${project.title || "未命名创作"}，内容库项目`}
+      aria-label={`${project.title || "未命名创作"}，创作台项目`}
       onPointerDown={startCardDrag}
       onContextMenu={(event) => {
         if (event.target.closest("button, input, select, textarea, [data-no-sort]")) return;
@@ -962,6 +1013,7 @@ export function QueuePage({
   notify,
   onCreateContent,
   onDeleteProject,
+  onCompleteProject,
   onUpdateProject,
   onUploadCovers,
   onUploadMedia,
@@ -976,7 +1028,8 @@ export function QueuePage({
   const [newProjectId, setNewProjectId] = useState("");
   const [previewCover, setPreviewCover] = useState(null);
   const [uploadingProjectId, setUploadingProjectId] = useState(null);
-  const [statusFilter, setStatusFilter] = useState("全部");
+  const [formatPreview, setFormatPreview] = useState(null);
+  const [formattedBodyUndo, setFormattedBodyUndo] = useState({});
   const [assetStates, setAssetStates] = useState({});
   const [contextMenu, setContextMenu] = useState(null);
   const startingOrder = useRef([]);
@@ -1009,12 +1062,43 @@ export function QueuePage({
     try {
       const project = await onCreateContent();
       if (project?.id) {
-        setStatusFilter("全部");
         setNewProjectId(project.id);
       }
     } finally {
       setCreatingContent(false);
     }
+  };
+
+  const previewBodyFormat = (project, accountRole, body) => {
+    const formatted = formatBodyText(body);
+    if (formatted === body) {
+      notify("正文格式已经规整");
+      return;
+    }
+    const accountLabel = CONTENT_ACCOUNT_VARIANTS.find((item) => item.id === accountRole)?.label || "正文";
+    setFormatPreview({ projectId: project.id, accountRole, accountLabel, original: body, formatted });
+  };
+
+  const confirmBodyFormat = () => {
+    if (!formatPreview) return;
+    const { projectId, accountRole, original, formatted } = formatPreview;
+    onUpdateProject(projectId, (current) => updateProjectAccountCopy(current, accountRole, { body: formatted }));
+    setFormattedBodyUndo((current) => ({ ...current, [`${projectId}:${accountRole}`]: original }));
+    setFormatPreview(null);
+    notify("已规整正文格式，可撤销");
+  };
+
+  const undoBodyFormat = (project, accountRole) => {
+    const key = `${project.id}:${accountRole}`;
+    const original = formattedBodyUndo[key];
+    if (typeof original !== "string") return;
+    onUpdateProject(project.id, (current) => updateProjectAccountCopy(current, accountRole, { body: original }));
+    setFormattedBodyUndo((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    notify("已恢复规整前正文");
   };
 
   const statusSignature = useMemo(() => JSON.stringify(projects.map((project) => ({
@@ -1182,11 +1266,11 @@ export function QueuePage({
 
   const activeProject = projects.find((project) => project.id === activeId);
   const activeIndex = activeProject ? projects.indexOf(activeProject) : 0;
-  const filteredProjects = projects.filter((project) => (
-    statusFilter === "全部"
-    || (statusFilter === "已完成" ? isCreationComplete(project) : !isCreationComplete(project))
-  ));
-  const completedCount = projects.filter(isCreationComplete).length;
+  // Array membership is the source of truth: projects belong to the creation
+  // workspace and archive items belong to the archive. Legacy projects may
+  // already carry creationStatus=completed, but must remain visible until the
+  // user explicitly completes and moves them.
+  const filteredProjects = projects;
 
   return (
     <div
@@ -1200,23 +1284,11 @@ export function QueuePage({
       }}
     >
       <QueueHeader
-        completedCount={completedCount}
         creatingContent={creatingContent}
         onCreateContent={createContent}
         setSidebarOpen={setSidebarOpen}
       />
-      <div className="toolbar-row queue-toolbar">
-        <div className="segmented-control" aria-label="创作状态筛选">
-          {[
-            { id: "全部", count: projects.length },
-            { id: "正在创作", count: projects.length - completedCount },
-            { id: "已完成", count: completedCount },
-          ].map((item) => (
-            <button type="button" key={item.id} className={statusFilter === item.id ? "active" : ""} onClick={() => setStatusFilter(item.id)}>{item.id} <small>{item.count}</small></button>
-          ))}
-        </div>
-        <span className="result-count">{filteredProjects.length} 条内容索引</span>
-      </div>
+      <div className="toolbar-row queue-toolbar"><span className="result-count">{filteredProjects.length} 条正在创作</span></div>
       <div className="queue-legend"><div><GripVertical size={16} /><span>拖动卡片调整顺序</span></div></div>
 
       {filteredProjects.length ? (
@@ -1245,7 +1317,7 @@ export function QueuePage({
           }}
         >
           <SortableContext items={filteredProjects.map((project) => project.id)} strategy={verticalListSortingStrategy}>
-            <section className="queue-list" aria-label="内容库项目">
+            <section className="queue-list" aria-label="创作台项目">
               {filteredProjects.map((project) => (
                 <SortableQueueCard
                   key={project.id}
@@ -1262,7 +1334,14 @@ export function QueuePage({
                     setExpanded((current) => current === key ? null : key);
                   }}
                   onDelete={deleteProject}
+                  onComplete={async (item) => {
+                    setExpanded((current) => current?.startsWith(`${item.id}:`) ? null : current);
+                    await onCompleteProject?.(item.id);
+                  }}
                   onUpdateProject={onUpdateProject}
+                  onFormatBody={previewBodyFormat}
+                  onUndoBodyFormat={undoBodyFormat}
+                  formattedBodyUndo={formattedBodyUndo}
                   onAddCover={(accountRole) => chooseCovers(project.id, accountRole)}
                   onDropCovers={(accountRole, files) => {
                     setExpanded(`${project.id}:${accountRole}`);
@@ -1286,9 +1365,9 @@ export function QueuePage({
       ) : (
         <div className="empty-state">
           <div className="empty-icon"><Plus size={20} /></div>
-          <h2>{projects.length ? "这个状态下没有内容" : "内容库为空"}</h2>
-          <p>{projects.length ? "切换上方状态查看其他内容。" : "从灵感卡片点“创作”，保存后会进入这里沉淀和整理。"}</p>
-          {!projects.length && (
+          <h2>{projects.length ? "没有正在创作的内容" : "创作台为空"}</h2>
+          <p>{projects.length ? "已完成内容在归档库中保留。" : "从灵感卡片点“创作”，保存后会进入这里继续整理。"}</p>
+          {!filteredProjects.length && (
             <button type="button" className="primary-button queue-empty-create" onClick={createContent} disabled={creatingContent}>
               {creatingContent ? <RefreshCw size={16} className="spin" /> : <Plus size={16} />}
               {creatingContent ? "正在新建" : "新建第一条内容"}
@@ -1297,9 +1376,10 @@ export function QueuePage({
         </div>
       )}
 
-      <input ref={coverInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="选择内容库封面图片" onChange={uploadCovers} />
-      <input ref={mediaInputRef} className="sr-only" type="file" accept={VIDEO_ACCEPT} aria-label="选择内容库视频素材" onChange={uploadMedia} />
+      <input ref={coverInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="选择创作台封面图片" onChange={uploadCovers} />
+      <input ref={mediaInputRef} className="sr-only" type="file" accept={VIDEO_ACCEPT} aria-label="选择创作台视频素材" onChange={uploadMedia} />
       <CoverPreviewModal cover={previewCover} onClose={() => setPreviewCover(null)} />
+      <BodyFormatPreviewModal preview={formatPreview} onClose={() => setFormatPreview(null)} onConfirm={confirmBodyFormat} />
       <QueueContextMenu
         menu={contextMenu}
         onClose={() => setContextMenu(null)}

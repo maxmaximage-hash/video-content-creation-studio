@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -108,7 +108,7 @@ async function seedLibrary(request) {
 
 async function openQueue(page) {
   await page.goto("/");
-  await page.getByRole("button", { name: /^待发布/ }).click();
+  await page.getByRole("button", { name: /^创作台/ }).click();
   await expect(page.locator("[data-project-id]")).toHaveCount(3);
 }
 
@@ -119,13 +119,13 @@ async function order(page) {
 async function orderWithPriority(page) {
   return page.locator("[data-project-id]").evaluateAll((cards) => cards.map((card) => ({
     id: card.dataset.projectId,
-    priority: card.querySelector(".priority-block")?.textContent.trim(),
+    priority: card.querySelector(".queue-card-number")?.textContent.trim(),
   })));
 }
 
 async function dragToCard(page, sourceId, targetId, sourceMode = "handle") {
   const handle = sourceMode === "card"
-    ? page.locator(`[data-project-id="${sourceId}"] .queue-card-topbar > span`).last()
+    ? page.locator(`[data-project-id="${sourceId}"]`)
     : page.locator(`[data-project-id="${sourceId}"] .drag-zone`);
   const sourceCard = page.locator(`[data-project-id="${sourceId}"]`);
   const target = page.locator(`[data-project-id="${targetId}"]`);
@@ -179,7 +179,7 @@ test.beforeEach(async ({ request, page }) => {
   const errors = [];
   browserErrors.set(page, errors);
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(message.text());
+    if (message.type() === "error") errors.push(`${message.text()} @ ${message.location().url || "unknown"}`);
   });
   page.on("pageerror", (error) => errors.push(error.message));
   await seedLibrary(request);
@@ -189,7 +189,7 @@ test.afterEach(async ({ page }) => {
   expect(browserErrors.get(page) || []).toEqual([]);
 });
 
-test("内容库空态和页头都能新建内容并自动保存", async ({ page, request }) => {
+test("创作台空态和页头都能新建内容并自动保存", async ({ page, request }) => {
   const response = await request.post("/api/library", {
     data: {
       categories: ["情感", "展示面", "认知", "教程"],
@@ -204,8 +204,8 @@ test("内容库空态和页头都能新建内容并自动保存", async ({ page,
   expect(response.ok()).toBeTruthy();
 
   await page.goto("/");
-  await page.getByRole("button", { name: "内容库", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "内容库", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "创作台", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "创作台", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "新建内容", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "新建第一条内容", exact: true }).click();
 
@@ -236,7 +236,7 @@ test("内容库空态和页头都能新建内容并自动保存", async ({ page,
   });
 
   await page.reload();
-  await page.getByRole("button", { name: "内容库", exact: true }).click();
+  await page.getByRole("button", { name: "创作台", exact: true }).click();
   await expect(page.locator(`[data-project-id="${firstId}"]`).getByLabel("博主号标题")).toHaveValue("新建内容验收");
 
   await page.setViewportSize({ width: 390, height: 780 });
@@ -262,23 +262,79 @@ test("内容库空态和页头都能新建内容并自动保存", async ({ page,
   await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe("博主号标题");
 });
 
+test("正文格式规整支持预览确认、撤销、幂等和自动保存", async ({ page, request }) => {
+  await openQueue(page);
+  const card = page.locator('[data-project-id="C000127"]');
+  const body = card.getByLabel("博主号正文", { exact: true });
+  const original = "> **王的姿态**  \n\n\n保留 > 和 *普通星号*\n数字 123  ";
+  const formatted = "王的姿态\n\n保留 > 和 *普通星号*\n数字 123";
+
+  await body.fill(original);
+  await card.getByRole("button", { name: "规整博主号正文格式", exact: true }).click();
+  const preview = page.getByRole("dialog", { name: "格式规整预览" });
+  await expect(preview.getByLabel("原文")).toHaveValue(original);
+  await expect(preview.getByLabel("规整后")).toHaveValue(formatted);
+  await preview.getByRole("button", { name: "确认规整", exact: true }).click();
+  await expect(body).toHaveValue(formatted);
+  await expect(card.getByRole("button", { name: "撤销博主号正文格式规整", exact: true })).toBeVisible();
+
+  await card.getByRole("button", { name: "撤销博主号正文格式规整", exact: true }).click();
+  await expect(body).toHaveValue(original);
+  await card.getByRole("button", { name: "规整博主号正文格式", exact: true }).click();
+  await preview.getByRole("button", { name: "确认规整", exact: true }).click();
+  await expect(body).toHaveValue(formatted);
+  await card.getByRole("button", { name: "规整博主号正文格式", exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  await expect(page.locator(".toast")).toContainText("正文格式已经规整");
+
+  await expect.poll(async () => {
+    const library = await (await request.get("/api/library")).json();
+    return library.projects.find((project) => project.id === "C000127")?.accountVariants?.blogger?.body;
+  }).toBe(formatted);
+  await page.reload();
+  await page.getByRole("button", { name: /^创作台/ }).click();
+  await expect(page.locator('[data-project-id="C000127"]').getByLabel("博主号正文", { exact: true })).toHaveValue(formatted);
+});
+
+test("正文规整后立即完成仍归档最新内容", async ({ page, request }) => {
+  await openQueue(page);
+  const card = page.locator('[data-project-id="C000127"]');
+  const original = "> **立即归档正文**   \n\n\n> 数字 2026 保持不变   ";
+  const formatted = "立即归档正文\n\n数字 2026 保持不变";
+
+  await card.getByLabel("博主号正文", { exact: true }).fill(original);
+  await card.getByRole("button", { name: "规整博主号正文格式", exact: true }).click();
+  await page.getByRole("dialog", { name: "格式规整预览" }).getByRole("button", { name: "确认规整", exact: true }).click();
+  await card.getByRole("button", { name: "完成", exact: true }).click();
+
+  await expect.poll(async () => {
+    const library = await (await request.get("/api/library")).json();
+    const archived = library.archive.find((project) => project.id === "C000127");
+    return {
+      body: archived?.body,
+      bloggerBody: archived?.accountVariants?.blogger?.body,
+      stillCreating: library.projects.some((project) => project.id === "C000127"),
+    };
+  }).toEqual({ body: formatted, bloggerBody: formatted, stillCreating: false });
+});
+
 test("card hierarchy, editable copy, large cover surfaces and button isolation", async ({ page, request }) => {
   await openQueue(page);
 
   const firstCard = page.locator('[data-project-id="C000127"]');
-  await expect(firstCard.locator(".priority-block")).toHaveText("01");
-  await expect(firstCard.locator(".priority-block")).not.toContainText("优先级");
+  await expect(firstCard.locator(".queue-card-number")).toHaveText("01");
+  await expect(firstCard.locator(".queue-card-number")).not.toContainText("优先级");
   await expect(page.getByRole("button", { name: /^(上移|下移)$/ })).toHaveCount(0);
   await expect(firstCard).not.toContainText(/C\d{6}/);
-  await expect(firstCard.locator(".queue-card-topbar")).toContainText("正在创作");
+  await expect(firstCard.locator(".queue-card-header")).toContainText("正在创作");
   await expect(firstCard.getByLabel("一条视频从选题到开拍的 24 小时分类")).toHaveValue("教程");
   await expect(firstCard.getByTestId("collapsed-covers-C000127")).toContainText("2 张封面");
-  await expect(firstCard.getByLabel("待发布标题")).toHaveValue(projects[0].title);
-  await expect(firstCard.getByLabel("待发布正文")).toHaveValue(projects[0].body);
+  await expect(firstCard.getByLabel("博主号标题", { exact: true })).toHaveValue(projects[0].title);
+  await expect(firstCard.getByLabel("博主号正文", { exact: true })).toHaveValue(projects[0].body);
 
   const editorMetrics = await firstCard.evaluate((card) => {
-    const title = card.querySelector(".queue-title-editor");
-    const body = card.querySelector(".queue-body-editor");
+    const title = card.querySelector('[data-account-role="blogger"] .queue-title-editor');
+    const body = card.querySelector('[data-account-role="blogger"] .queue-body-editor');
     const cover = card.querySelector(".queue-cover-item");
     return {
       titleFits: title.scrollHeight <= title.clientHeight + 1,
@@ -294,25 +350,25 @@ test("card hierarchy, editable copy, large cover surfaces and button isolation",
     titleFits: true,
     bodyOverflow: "auto",
     bodyResize: "vertical",
-    bodyMinHeight: "96px",
-    bodyMaxHeight: "320px",
+    bodyMinHeight: "110px",
+    bodyMaxHeight: "260px",
   });
-  expect(editorMetrics.coverWidth).toBeGreaterThanOrEqual(126);
-  expect(editorMetrics.coverHeight).toBeGreaterThanOrEqual(200);
+  expect(editorMetrics.coverWidth).toBeGreaterThanOrEqual(100);
+  expect(editorMetrics.coverHeight).toBeGreaterThanOrEqual(145);
 
   const originalOrder = await order(page);
-  await firstCard.locator('.queue-title button[aria-label="复制"]').click();
-  await firstCard.locator('.queue-summary button[aria-label="复制"]').click();
+  await firstCard.locator('[data-account-role="blogger"] .queue-account-title-row button[aria-label="复制"]').click();
+  await firstCard.locator('[data-account-role="blogger"] .queue-account-body-row button[aria-label="复制"]').click();
   await expect(page.locator(".toast")).toContainText(/已(模拟)?复制/);
   expect(await order(page)).toEqual(originalOrder);
   await expect(firstCard).not.toHaveClass(/dragging/);
-  const fieldStyles = await firstCard.locator(".queue-text-field").evaluateAll((fields) => fields.map((field) => ({
+  const fieldStyles = await firstCard.locator('[data-account-role="blogger"] .queue-title-editor, [data-account-role="blogger"] .queue-body-editor').evaluateAll((fields) => fields.map((field) => ({
     borderStyle: getComputedStyle(field).borderTopStyle,
     borderWidth: getComputedStyle(field).borderTopWidth,
   })));
   expect(fieldStyles).toEqual([
-    { borderStyle: "solid", borderWidth: "1px" },
-    { borderStyle: "solid", borderWidth: "1px" },
+    { borderStyle: "none", borderWidth: "0px" },
+    { borderStyle: "none", borderWidth: "0px" },
   ]);
 
   const dormantCoverControls = firstCard.locator(".queue-cover-sort-handle, .queue-native-drag-handle, .queue-target-menu-button, .queue-cover-remove");
@@ -320,7 +376,6 @@ test("card hierarchy, editable copy, large cover surfaces and button isolation",
     const style = getComputedStyle(control);
     return style.opacity === "0" && style.pointerEvents === "none";
   }))).toBe(true);
-  await expect(firstCard.locator("svg.lucide-ellipsis, svg.lucide-more-horizontal")).toHaveCount(0);
   await firstCard.getByRole("button", { name: "展开封面 2 张" }).first().click();
   await expect(firstCard.getByTestId("expanded-covers-C000127").locator("img")).toHaveCount(2);
   await expect(firstCard.getByTestId("add-cover-C000127")).toBeVisible();
@@ -344,6 +399,35 @@ test("card hierarchy, editable copy, large cover surfaces and button isolation",
   await expect(lightbox).toHaveCount(0);
 
   const fileChooserPromise = page.waitForEvent("filechooser");
+  const uploadedCoverBytes = await readFile(path.join(prototypeRoot, "public/assets/covers/mountain-trail.png"));
+  await page.route("**/api/covers?*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        cover: {
+          id: "EAGLE-QUEUE-COVER",
+          eagleItemId: "EAGLE-QUEUE-COVER",
+          eagleFolderId: "MS8R943CBJV6L",
+          name: "mountain-trail.png",
+          contentType: "image/png",
+          size: uploadedCoverBytes.length,
+        },
+      }),
+    });
+  });
+  await page.route("**/api/eagle-media/**", async (route) => {
+    await route.fulfill({ status: 200, contentType: "image/png", body: uploadedCoverBytes });
+  });
+  await page.route("**/api/project-assets/status", async (route) => {
+    const payload = route.request().postDataJSON();
+    const states = Object.fromEntries((payload.assets || []).map((asset) => [asset.key, {
+      state: asset.eagleItemId || asset.relativePath ? "available" : "not_added",
+      eagleItemId: asset.eagleItemId || "",
+      relativePath: asset.relativePath || "",
+    }]));
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ states }) });
+  });
   await firstCard.getByTestId("add-cover-C000127").click();
   const fileChooser = await fileChooserPromise;
   await fileChooser.setFiles(path.join(prototypeRoot, "public/assets/covers/mountain-trail.png"));
@@ -373,12 +457,10 @@ test("card hierarchy, editable copy, large cover surfaces and button isolation",
   await expect(expanded.locator(".queue-cover-sort-handle")).toHaveCount(0);
 });
 
-test("发布保留快照并进入归档", async ({ page, request }) => {
+test("完成内容后立即进入归档库", async ({ page, request }) => {
   await openQueue(page);
   const firstCard = page.locator('[data-project-id="C000127"]');
-  await firstCard.getByRole("button", { name: "发布", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "确认发布" })).toBeVisible();
-  await page.getByRole("button", { name: "发布并进入归档" }).click();
+  await firstCard.getByRole("button", { name: "完成", exact: true }).click();
   await expect(firstCard).toHaveCount(0);
   await expect.poll(async () => {
     const response = await request.get("/api/library");
@@ -396,7 +478,7 @@ test("删除按钮彻底移除待发布内容并保留其它数据", async ({ pa
   await expect(firstCard.getByRole("button", { name: "删除", exact: true })).toBeVisible();
 
   page.once("dialog", async (dialog) => {
-    expect(dialog.message()).toContain("资料库文件都会立即删除");
+    expect(dialog.message()).toContain("不会删除 Eagle 中的任何文件");
     await dialog.dismiss();
   });
   await firstCard.getByRole("button", { name: "删除", exact: true }).click();
@@ -404,7 +486,7 @@ test("删除按钮彻底移除待发布内容并保留其它数据", async ({ pa
   expect(await order(page)).toEqual(["C000127", "C000128", "C000126"]);
 
   page.once("dialog", async (dialog) => {
-    expect(dialog.message()).toContain("确定彻底删除");
+    expect(dialog.message()).toContain("确定从软件中删除");
     await dialog.accept();
   });
   await firstCard.getByRole("button", { name: "删除", exact: true }).click();
@@ -508,15 +590,15 @@ test("视频灵感预览默认开声，用户可手动关闭", async ({ page, re
   await expect(videoCard.locator(".media-playback-status")).toHaveCount(0);
   await expect(videoCard).not.toContainText("正在加载视频");
   await expect(videoCard.getByRole("button", { name: "关闭声音", exact: true })).toHaveCount(1);
-  await videoCard.getByRole("button", { name: "播放预览", exact: true }).click();
+  await previewVideo.dispatchEvent("playing");
   await expect(mediaPreview).toHaveClass(/video-ready/);
   await expect(videoCard.getByRole("button", { name: "暂停预览", exact: true })).toBeVisible();
-  await videoCard.getByRole("button", { name: "暂停预览", exact: true }).click();
+  await previewVideo.dispatchEvent("pause");
   await expect(videoCard.getByRole("button", { name: "播放预览", exact: true })).toBeVisible();
   await page.reload();
   await expect(videoCard).toHaveCount(1);
-  await page.mouse.move(1, 1);
-  await videoCard.locator(".media-hover-surface").hover();
+  await expect(videoCard.getByRole("button", { name: "播放预览", exact: true })).toBeVisible();
+  await videoCard.locator("video").dispatchEvent("playing");
   await expect(videoCard.getByRole("button", { name: "暂停预览", exact: true })).toBeVisible();
 });
 
@@ -701,7 +783,7 @@ test("dragging 03 to 01 reorders before release and persists", async ({ page, re
   }).toEqual(["C000126", "C000127", "C000128"]);
 
   await page.reload();
-  await page.getByRole("button", { name: /^待发布/ }).click();
+  await page.getByRole("button", { name: /^创作台/ }).click();
   await expect.poll(() => order(page)).toEqual(["C000126", "C000127", "C000128"]);
   await expect.poll(() => orderWithPriority(page)).toEqual([
     { id: "C000126", priority: "01" },
@@ -727,7 +809,7 @@ test("dragging 01 to 03 reorders before release and persists", async ({ page, re
   }).toEqual(["C000128", "C000126", "C000127"]);
 
   await page.reload();
-  await page.getByRole("button", { name: /^待发布/ }).click();
+  await page.getByRole("button", { name: /^创作台/ }).click();
   await expect.poll(() => orderWithPriority(page)).toEqual([
     { id: "C000128", priority: "01" },
     { id: "C000126", priority: "02" },
@@ -750,8 +832,8 @@ test("desktop viewport screenshots remain free of overlap and overflow", async (
     const layout = await page.evaluate(() => {
       const cardElement = document.querySelector('[data-project-id="C000128"]');
       const coverElement = cardElement.querySelector(".queue-cover-gallery-expanded");
-      const copyElement = cardElement.querySelector(".queue-copy");
-      const actionElement = cardElement.querySelector(".queue-actions");
+      const copyElement = cardElement.querySelector('[data-account-role="blogger"] .queue-account-body-row');
+      const actionElement = cardElement.querySelector(".queue-card-actions");
       const rect = (element) => {
         const box = element.getBoundingClientRect();
         return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };

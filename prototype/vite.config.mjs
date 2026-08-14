@@ -38,7 +38,7 @@ import {
   stripContentFromLibrary,
 } from "./server/library-hard-delete.mjs";
 import { createTranscriptionService } from "./server/transcription-service.mjs";
-import { createProjectIndex, removeProjectIndex } from "./server/project-index.mjs";
+import { createProjectIndex, moveProjectIndex, removeProjectIndex } from "./server/project-index.mjs";
 import {
   isPathInside,
   validateContentId,
@@ -3444,6 +3444,25 @@ function installLibraryApi(server, libraryManager, options = {}) {
                 libraryManager,
               });
               res.statusCode = 201;
+              res.end(JSON.stringify(result));
+              return;
+            }
+            const stateMatch = requestUrl.pathname.match(/^\/api\/projects\/([^/]+)\/(archive|restore)$/);
+            if (stateMatch) {
+              if (req.method !== "POST") {
+                res.statusCode = 405;
+                res.end(JSON.stringify({ error: "Method not allowed" }));
+                return;
+              }
+              const payload = await readJsonBody(req);
+              const result = await moveProjectIndex({
+                projectId: decodeURIComponent(stateMatch[1]),
+                destination: stateMatch[2] === "archive" ? "archive" : "projects",
+                fallbackProject: payload.project,
+                sessionId: req.headers["x-library-session-id"] || "",
+                expectedRevision: req.headers["x-library-revision"] || "",
+                libraryManager,
+              });
               res.end(JSON.stringify(result));
               return;
             }

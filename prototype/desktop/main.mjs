@@ -8,13 +8,16 @@ import { DEFAULT_LIBRARY_NAME } from "../server/library-manager.mjs";
 import { resolveDragFile } from "./file-drag.mjs";
 import { createReusableServerLifecycle } from "./server-lifecycle.mjs";
 
-const APP_NAME = "视频内容创作中台";
+const APP_NAME = "Video Hub";
+const LEGACY_USER_DATA_NAME = "视频内容创作中台";
 const smokeTest = process.argv.includes("--smoke-test");
 let mainWindow = null;
 let activeLibraryDir = null;
 let activeLibrarySessionId = "";
 
 app.setName(APP_NAME);
+// Keep upgrades on the existing session and platform-login profiles while the visible brand changes.
+app.setPath("userData", path.join(app.getPath("appData"), LEGACY_USER_DATA_NAME));
 
 function defaultLibraryDir() {
   const configuredRoot = String(process.env.VIDEO_CONTENT_LIBRARY_ROOT || "").trim();

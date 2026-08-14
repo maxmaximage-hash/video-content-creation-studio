@@ -59,8 +59,13 @@ async function findBuiltApp() {
   const candidates = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const candidate = path.join(releaseRoot, entry.name, APP_NAME);
-    if (await bundleId(candidate) === APP_ID) candidates.push(candidate);
+    const outputDir = path.join(releaseRoot, entry.name);
+    const apps = await fs.readdir(outputDir, { withFileTypes: true }).catch(() => []);
+    for (const app of apps) {
+      if (!app.isDirectory() || !app.name.endsWith(".app")) continue;
+      const candidate = path.join(outputDir, app.name);
+      if (await bundleId(candidate) === APP_ID) candidates.push(candidate);
+    }
   }
   candidates.sort((left, right) => right.localeCompare(left));
   if (!candidates.length) throw new Error("没有找到可安装的桌面应用产物");

@@ -101,7 +101,7 @@ test("single ID delete preserves external migration fields and local dirty edits
   await fs.writeFile(indexFile, `${JSON.stringify(clientLibrary, null, 2)}\n`, "utf8");
 
   await page.goto("/");
-  await page.getByRole("button", { name: "内容库" }).click();
+  await page.getByRole("button", { name: "创作台" }).click();
   const preservedCard = page.locator('[data-project-id="C000023"]');
   await expect(preservedCard).toBeVisible();
 
@@ -134,12 +134,12 @@ test("single ID delete preserves external migration fields and local dirty edits
   await fs.writeFile(indexFile, `${JSON.stringify(latestLibrary, null, 2)}\n`, "utf8");
 
   const dirtyBody = "本地 dirty edit：用户还没保存，但删除索引不能把它清掉。";
-  await preservedCard.getByLabel("博主号正文").fill(dirtyBody);
+  await preservedCard.getByLabel("博主号正文", { exact: true }).fill(dirtyBody);
   page.once("dialog", (dialog) => dialog.accept());
   await page.locator('[data-project-id="C000022"]').getByRole("button", { name: "删除" }).click();
 
   await expect(page.locator('[data-project-id="C000022"]')).toHaveCount(0);
-  await expect(preservedCard.getByLabel("博主号正文")).toHaveValue(dirtyBody);
+  await expect(preservedCard.getByLabel("博主号正文", { exact: true })).toHaveValue(dirtyBody);
   await expect(page.locator(".toast")).toContainText("已删除软件索引");
   await expect(page.locator(".toast")).not.toContainText("版本已变化");
   await page.waitForTimeout(800);
@@ -192,7 +192,7 @@ test("queued project delete disappears immediately while the atomic request is s
     });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "内容库" }).click();
+  await page.getByRole("button", { name: "创作台" }).click();
   const removed = page.locator('[data-project-id="C001101"]');
   await expect(removed).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept());
@@ -217,7 +217,7 @@ test("failed queued delete restores the card instead of leaving a phantom remova
     });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "内容库" }).click();
+  await page.getByRole("button", { name: "创作台" }).click();
   const card = page.locator('[data-project-id="C001103"]');
   page.once("dialog", (dialog) => dialog.accept());
   await card.getByRole("button", { name: "删除", exact: true }).click();
@@ -250,7 +250,7 @@ test("rapid deletes are serialized while both cards disappear immediately", asyn
     });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "内容库" }).click();
+  await page.getByRole("button", { name: "创作台" }).click();
   for (const id of ["C001105", "C001106"]) {
     const card = page.locator(`[data-project-id="${id}"]`);
     page.once("dialog", (dialog) => dialog.accept());
@@ -275,7 +275,7 @@ test("missing legacy local cover uses a stable placeholder instead of a broken i
     mediaAssets: [],
   }]);
   await page.goto("/");
-  await page.getByRole("button", { name: "内容库" }).click();
+  await page.getByRole("button", { name: "创作台" }).click();
   const card = page.locator('[data-project-id="C001104"]');
   await expect(card.getByRole("img", { name: "封面不可用" })).toBeVisible({ timeout: 5000 });
   await expect(card.locator(".queue-cover-item img")).toHaveCount(0);
@@ -295,7 +295,7 @@ test("new content appears immediately and stays editable while its atomic create
     });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "内容库" }).click();
+  await page.getByRole("button", { name: "创作台" }).click();
   await page.getByRole("button", { name: "新建第一条内容", exact: true }).click();
   const card = page.locator("[data-project-id]");
   await expect(card).toHaveCount(1, { timeout: 500 });
@@ -321,7 +321,7 @@ test("failed optimistic content create rolls its card back", async ({ page, requ
     });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "内容库" }).click();
+  await page.getByRole("button", { name: "创作台" }).click();
   await page.getByRole("button", { name: "新建第一条内容", exact: true }).click();
   await expect(page.locator("[data-project-id]")).toHaveCount(1, { timeout: 500 });
   await expect(page.locator("[data-project-id]")).toHaveCount(0);
@@ -340,7 +340,7 @@ test("create immediately after delete does not wait for the delete request", asy
     return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ createdProject, revision: 811 }) });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "内容库" }).click();
+  await page.getByRole("button", { name: "创作台" }).click();
   const deleted = page.locator('[data-project-id="C001107"]');
   page.once("dialog", (dialog) => dialog.accept());
   await deleted.getByRole("button", { name: "删除", exact: true }).click();

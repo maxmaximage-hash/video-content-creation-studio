@@ -6,7 +6,9 @@ import {
   Image as ImageIcon,
   Menu,
   MoreHorizontal,
+  RotateCcw,
   Tags,
+  Trash2,
 } from "lucide-react";
 import {
   coverSource,
@@ -309,7 +311,7 @@ function ArchiveFallback({ item }) {
       <div>
         <span className="archive-asset-state state-not_added">未上传</span>
         <strong>未添加成品视频</strong>
-        <small>发布快照已保留，可稍后补充媒体。</small>
+        <small>完成记录已保留，可稍后补充媒体。</small>
       </div>
     </div>
   );
@@ -321,6 +323,8 @@ function ArchiveCard({
   assetStates,
   notify,
   onOpenMenu,
+  onRestore,
+  onDelete,
 }) {
   const videos = archiveFinishedVideos(item);
   const referenceCount = Number(item.referenceCount)
@@ -329,11 +333,11 @@ function ArchiveCard({
     <article className="archive-record" data-archive-id={item.id}>
       <div className="archive-record-meta">
         <div>
-          <span className="archive-published-state">已发布</span>
+          <span className="archive-published-state">已完成</span>
           <span>{categoryLabel(item)}</span>
           <span>{videos.length} 条成品视频</span>
         </div>
-        <time>{item.publishedAt}</time>
+        <time>{item.completedAt || item.archivedAt || item.publishedAt}</time>
       </div>
 
       {videos.length ? (
@@ -376,6 +380,12 @@ function ArchiveCard({
             successMessage="全文已复制"
             notify={notify}
           />
+        </div>
+        <div className="archive-record-actions">
+          <button type="button" onClick={() => onRestore(item.id)}><RotateCcw size={14} />恢复到创作台</button>
+          <button type="button" className="archive-delete-button" onClick={() => {
+            if (window.confirm(`确定从软件中删除「${item.title || "未命名创作"}」吗？\n\n只会删除软件索引，不会删除 Eagle 中的任何文件。`)) onDelete(item.id);
+          }}><Trash2 size={14} />删除</button>
         </div>
       </div>
     </article>
@@ -443,9 +453,9 @@ function ArchiveHeader({ setSidebarOpen }) {
           <Menu size={20} />
         </ArchiveIconButton>
         <div>
-          <span className="eyebrow">04 / 发布归档</span>
-          <h1>归档</h1>
-          <p>发布快照立即保留；成品视频与后续归档匹配保持独立。</p>
+          <span className="eyebrow">04 / 已完成内容</span>
+          <h1>归档库</h1>
+          <p>已完成内容保留原有文案、Eagle 关联和媒体索引，可随时恢复到创作台。</p>
         </div>
       </div>
     </header>
@@ -459,6 +469,8 @@ export function ArchivePage({
   openCategoryManager,
   notify,
   onRevealTarget,
+  onRestoreProject,
+  onDeleteProject,
   setSidebarOpen,
   storage,
 }) {
@@ -559,7 +571,7 @@ export function ArchivePage({
             </button>
           ))}
         </div>
-        <span className="result-count">{filtered.length} 条发布记录</span>
+        <span className="result-count">{filtered.length} 条归档内容</span>
       </div>
 
       <div className="category-strip" aria-label="归档分类筛选">
@@ -572,7 +584,7 @@ export function ArchivePage({
       </div>
 
       {filtered.length ? (
-        <section className="archive-grid" aria-label="发布归档">
+        <section className="archive-grid" aria-label="归档库内容">
           {filtered.map((item) => (
             <ArchiveCard
               item={item}
@@ -580,6 +592,8 @@ export function ArchivePage({
               assetStates={assetStates}
               notify={notify}
               onOpenMenu={openMenu}
+              onRestore={onRestoreProject}
+              onDelete={onDeleteProject}
               key={item.id}
             />
           ))}
@@ -587,8 +601,8 @@ export function ArchivePage({
       ) : (
         <section className="archive-empty">
           <FileVideo2 size={28} />
-          <h2>归档为空</h2>
-          <p>发布后的内容会立即在这里保留快照。</p>
+          <h2>归档库为空</h2>
+          <p>在创作台完成的内容会立即保留在这里。</p>
         </section>
       )}
 

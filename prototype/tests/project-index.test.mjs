@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createLibraryManager } from "../server/library-manager.mjs";
-import { createProjectIndex, removeProjectIndex } from "../server/project-index.mjs";
+import { createProjectIndex, moveProjectIndex, removeProjectIndex } from "../server/project-index.mjs";
 
 function persistedFixture(library, overrides = {}) {
   const {
@@ -209,6 +209,99 @@ test("removing an already-missing project index is idempotent", async () => {
     assert.equal(result.alreadyRemoved, true);
     assert.equal(result.revision, before);
     assert.deepEqual((await libraryManager.readLibrary()).projects.map((project) => project.id), ["C000901"]);
+  } finally {
+    await libraryManager.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("archiving and restoring one project rebase on the newest library without changing Eagle links", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-studio-index-archive-"));
+  const libraryManager = createLibraryManager({ initialLibraryDir: null, qaMode: true });
+  try {
+    const opened = await libraryManager.manage("new", { path: path.join(root, "fixture.library") });
+    await libraryManager.writeLibrary({
+      projects: [
+        { id: "C000601", title: "完成目标", body: "本地正文", covers: [{ eagleItemId: "EAGLE-COVER-601", eagleFolderId: "MS8R943CBJV6L" }], mediaAssets: [{ id: "finished", role: "finished_video", eagleItemId: "EAGLE-VIDEO-601", eagleFolderId: "MS8R943CBJV6L" }] },
+        { id: "C000602", title: "保留内容", covers: [], mediaAssets: [] },
+      ],
+      inspirations: [], archive: [], activeProject: null,
+    }, opened.storage.sessionId);
+    const indexFile = path.join(opened.storage.libraryDir, "library.json");
+    const current = persistedFixture(await libraryManager.readLibrary());
+    await fs.writeFile(indexFile, `${JSON.stringify({ ...current, libraryRevision: current.libraryRevision + 1, projects: [...current.projects, { id: "C000603", title: "另一台新增", covers: [], mediaAssets: [] }] }, null, 2)}\n`);
+
+    const archived = await moveProjectIndex({ projectId: "C000601", destination: "archive", sessionId: opened.storage.sessionId, expectedRevision: 1, libraryManager });
+    assert.equal(archived.destination, "archive");
+    let persisted = await libraryManager.readLibrary();
+    assert.deepEqual(persisted.projects.map((item) => item.id), ["C000602", "C000603"]);
+    assert.deepEqual(persisted.archive.map((item) => item.id), ["C000601"]);
+    assert.equal(persisted.archive[0].covers[0].eagleItemId, "EAGLE-COVER-601");
+    assert.equal(persisted.archive[0].mediaAssets[0].eagleItemId, "EAGLE-VIDEO-601");
+
+    const restored = await moveProjectIndex({ projectId: "C000601", destination: "projects", sessionId: opened.storage.sessionId, expectedRevision: 1, libraryManager });
+    assert.equal(restored.destination, "projects");
+    persisted = await libraryManager.readLibrary();
+    assert.deepEqual(persisted.projects.map((item) => item.id), ["C000601", "C000602", "C000603"]);
+    assert.deepEqual(persisted.archive, []);
+    assert.equal(persisted.projects[0].covers[0].eagleItemId, "EAGLE-COVER-601");
+  } finally {
+    await libraryManager.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("archive move accepts the complete project snapshot when queue autosave has not landed yet", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-studio-index-archive-race-"));
+  const libraryManager = createLibraryManager({ initialLibraryDir: null, qaMode: true });
+  try {
+    const opened = await libraryManager.manage("new", { path: path.join(root, "fixture.library") });
+    const fallbackProject = {
+      id: "C000611",
+      title: "立即完成的内容",
+      body: "博主号正文",
+      accountVariants: { ip: { title: "IP 标题", body: "IP 正文" } },
+      covers: [{ id: "cover-611", eagleItemId: "EAGLE-COVER-611", eagleFolderId: "MS8R943CBJV6L" }],
+      mediaAssets: [{ id: "video-611", role: "finished_video", accountRole: "ip", eagleItemId: "EAGLE-VIDEO-611", eagleFolderId: "MS8R943CBJV6L" }],
+      references: [{ id: "I000611", title: "参考灵感" }],
+      workflow: { stage: "ready_to_publish", creationStatus: "in_progress" },
+    };
+    await libraryManager.writeLibrary({
+      projects: [{
+        ...fallbackProject,
+        title: "自动保存前的旧标题",
+        body: "自动保存前的旧正文",
+        accountVariants: {},
+        covers: [],
+        mediaAssets: [],
+        references: [],
+      }],
+      inspirations: [],
+      archive: [],
+      activeProject: fallbackProject,
+    }, opened.storage.sessionId);
+
+    const result = await moveProjectIndex({
+      projectId: fallbackProject.id,
+      destination: "archive",
+      fallbackProject,
+      sessionId: opened.storage.sessionId,
+      expectedRevision: 1,
+      libraryManager,
+    });
+
+    assert.equal(result.project.id, fallbackProject.id);
+    const persisted = await libraryManager.readLibrary();
+    assert.deepEqual(persisted.projects, []);
+    assert.equal(persisted.activeProject, null);
+    assert.equal(persisted.archive[0].title, "立即完成的内容");
+    assert.equal(persisted.archive[0].body, "博主号正文");
+    assert.equal(persisted.archive[0].accountVariants.ip.body, "IP 正文");
+    assert.equal(persisted.archive[0].covers[0].eagleItemId, "EAGLE-COVER-611");
+    assert.equal(persisted.archive[0].mediaAssets[0].eagleItemId, "EAGLE-VIDEO-611");
+    assert.deepEqual(persisted.archive[0].relationships.referenceContentIds, ["I000611"]);
+    assert.deepEqual(persisted.archive[0].references, ["I000611"]);
+    assert.equal(persisted.archive[0].workflow.stage, "archived");
   } finally {
     await libraryManager.dispose();
     await fs.rm(root, { recursive: true, force: true });

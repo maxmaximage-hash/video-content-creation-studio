@@ -8,6 +8,7 @@ import {
 import { CreationPage } from "./pages/creation/CreationPage.jsx";
 import { InspirationsPage } from "./pages/inspirations/InspirationsPage.jsx";
 import { QueuePage } from "./pages/queue/QueuePage.jsx";
+import { ArchivePage } from "./pages/archive/ArchivePage.jsx";
 import {
   clearProjectContent,
   coverSource,
@@ -56,7 +57,8 @@ const appBuildLabel = `v${__APP_VERSION__} · ${__APP_COMMIT__}${__APP_DIRTY__ ?
 const navItems = [
   { id: "inspirations", label: "灵感库", icon: Lightbulb },
   { id: "creation", label: "创作", icon: PencilLine },
-  { id: "queue", label: "内容库", icon: Inbox },
+  { id: "queue", label: "创作台", icon: Inbox },
+  { id: "archive", label: "归档库", icon: FolderOpen },
 ];
 
 function formatNow() {
@@ -349,7 +351,7 @@ function CategoryManagerModal({ categories, counts, onAdd, onClose, notify }) {
   };
 
   return (
-    <Modal title="分类管理" description="单层分类会贯穿灵感、创作与内容库。" onClose={onClose}>
+    <Modal title="分类管理" description="单层分类会贯穿灵感、创作台与归档库。" onClose={onClose}>
       <div className="category-manager">
         <div className="category-create-row">
           <input
@@ -438,7 +440,7 @@ function ClosedLibraryWorkspace({ busy, onAction }) {
   );
 }
 
-function AppSidebar({ page, setPage, queueCount, open, setOpen, storage, saveState, libraryBusy, onLibraryAction }) {
+function AppSidebar({ page, setPage, queueCount, archiveCount, open, setOpen, storage, saveState, libraryBusy, onLibraryAction }) {
   const [libraryMenuOpen, setLibraryMenuOpen] = useState(false);
   const chooseAction = (action) => {
     setLibraryMenuOpen(false);
@@ -449,8 +451,8 @@ function AppSidebar({ page, setPage, queueCount, open, setOpen, storage, saveSta
       <div className="brand-row">
         <div className="brand-mark"><img src="/app-icon.png" alt="" /></div>
         <div className="brand-copy">
-          <strong>创作台</strong>
-          <span>视频内容中台</span>
+          <strong>Video Hub</strong>
+          <span>创作台</span>
         </div>
         <IconButton label="收起导航" className="mobile-close" onClick={() => setOpen(false)}>
           <X size={18} />
@@ -460,7 +462,7 @@ function AppSidebar({ page, setPage, queueCount, open, setOpen, storage, saveSta
       <nav className="main-nav" aria-label="主导航">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const count = item.id === "queue" ? queueCount : null;
+          const count = item.id === "queue" ? queueCount : item.id === "archive" ? archiveCount : null;
           return (
             <button
               type="button"
@@ -508,7 +510,7 @@ function AppSidebar({ page, setPage, queueCount, open, setOpen, storage, saveSta
         </div>
         <span
           className={`prototype-label build-label${__APP_DIRTY__ ? " is-dirty" : ""}`}
-          title={`视频内容创作中台 ${appBuildLabel}`}
+          title={`Video Hub ${appBuildLabel}`}
         >
           {appBuildLabel}
         </span>
@@ -754,7 +756,7 @@ function CreationChoiceModal({ item, projects, onClose, onNew, onAdd, notify }) 
       {mode === "choice" ? (
         <div className="choice-list">
           <button type="button" onClick={() => onNew(item)}><span className="choice-icon coral"><Plus size={20} /></span><div><strong>开始新的创作</strong><p>生成新的永久内容 ID，并自动关联这条灵感。</p></div><ChevronRight size={18} /></button>
-          <button type="button" onClick={() => setMode("existing")} disabled={!projects.length}><span className="choice-icon blue"><Inbox size={20} /></span><div><strong>加入已有创作</strong><p>从内容库中选择一个选题继续整理。</p></div><ChevronRight size={18} /></button>
+          <button type="button" onClick={() => setMode("existing")} disabled={!projects.length}><span className="choice-icon blue"><Inbox size={20} /></span><div><strong>加入已有创作</strong><p>从创作台中选择一个选题继续整理。</p></div><ChevronRight size={18} /></button>
         </div>
       ) : (
         <div className="existing-list">
@@ -794,6 +796,7 @@ export function App() {
   const [deletingInspirationIds, setDeletingInspirationIds] = useState(() => new Set());
   const [deletingProjectIds, setDeletingProjectIds] = useState(() => new Set());
   const [creatingContentIds, setCreatingContentIds] = useState(() => new Set());
+  const [movingProjectIds, setMovingProjectIds] = useState(() => new Set());
   const legacyCategoriesRef = useRef([]);
   const userCategoriesStoredRef = useRef(false);
   const lastSavedSnapshotRef = useRef("");
@@ -807,12 +810,14 @@ export function App() {
   const deletingInspirationIdsRef = useRef(new Set());
   const deletingProjectIdsRef = useRef(new Set());
   const creatingContentIdsRef = useRef(new Set());
+  const movingProjectIdsRef = useRef(new Set());
   const projectIndexMutationQueueRef = useRef(Promise.resolve());
   const inspirationItemsRef = useRef(inspirationItems);
   const pendingReferencePatchesRef = useRef(new Map());
   const referencePatchTimersRef = useRef(new Map());
   const activeProjectRef = useRef(activeProject);
   const projectsRef = useRef(projects);
+  const archiveItemsRef = useRef(archiveItems);
   const linkedInspirationIds = useMemo(() => collectReferencedInspirationIds({
     activeProject,
     projects,
@@ -820,11 +825,13 @@ export function App() {
   }), [activeProject, projects, archiveItems]);
   activeProjectRef.current = activeProject;
   projectsRef.current = projects;
+  archiveItemsRef.current = archiveItems;
   inspirationItemsRef.current = inspirationItems;
   libraryRevisionRef.current = libraryRevision;
   deletingInspirationIdsRef.current = deletingInspirationIds;
   deletingProjectIdsRef.current = deletingProjectIds;
   creatingContentIdsRef.current = creatingContentIds;
+  movingProjectIdsRef.current = movingProjectIds;
   const editingProject = editingProjectId
     ? projects.find((project) => project.id === editingProjectId) || null
     : null;
@@ -852,6 +859,7 @@ export function App() {
       setDeletingProjectIds(new Set());
       creatingContentIdsRef.current = new Set();
       setCreatingContentIds(new Set());
+      setMovingProjectIds(new Set());
       lastSavedSnapshotRef.current = "";
       setLibraryLoaded(true);
       setLibraryWritable(false);
@@ -895,6 +903,7 @@ export function App() {
     setDeletingProjectIds(new Set());
     creatingContentIdsRef.current = new Set();
     setCreatingContentIds(new Set());
+    setMovingProjectIds(new Set());
     lastSavedSnapshotRef.current = stableLibrarySnapshot(librarySavePayload({
       legacyCategories: library.legacyCategories,
       categories: library.categories,
@@ -955,7 +964,7 @@ export function App() {
 
   useEffect(() => {
     if (!libraryLoaded || !libraryWritable) return undefined;
-    if (deletingInspirationIds.size || deletingProjectIds.size || creatingContentIds.size) {
+    if (deletingInspirationIds.size || deletingProjectIds.size || creatingContentIds.size || movingProjectIds.size) {
       setSaveState("saving");
       return undefined;
     }
@@ -975,7 +984,7 @@ export function App() {
     }
     setSaveState("saving");
     autosaveTimerRef.current = window.setTimeout(() => {
-      if (deletingInspirationIdsRef.current.size || deletingProjectIdsRef.current.size || creatingContentIdsRef.current.size || saveInFlightRef.current) return;
+      if (deletingInspirationIdsRef.current.size || deletingProjectIdsRef.current.size || creatingContentIdsRef.current.size || movingProjectIdsRef.current.size || saveInFlightRef.current) return;
       const requestRevision = libraryRevisionRef.current;
       const request = fetch("/api/library", {
         method: "POST",
@@ -1019,7 +1028,7 @@ export function App() {
       saveInFlightRef.current = request;
     }, 360);
     return () => window.clearTimeout(autosaveTimerRef.current);
-  }, [libraryLoaded, libraryWritable, categories, inspirationItems, projects, archiveItems, activeProject, storage?.sessionId, libraryRevision, deletingInspirationIds, deletingProjectIds, creatingContentIds]);
+  }, [libraryLoaded, libraryWritable, categories, inspirationItems, projects, archiveItems, activeProject, storage?.sessionId, libraryRevision, deletingInspirationIds, deletingProjectIds, creatingContentIds, movingProjectIds]);
 
   const openAuth = async (platform) => {
     notify("正在打开专用登录窗口");
@@ -1283,6 +1292,7 @@ export function App() {
         reference,
         createdAt: formatNow(),
       });
+      activeProjectRef.current = project;
       setActiveProject(project);
       setEditingProjectId(null);
       setPage("creation");
@@ -1376,8 +1386,12 @@ export function App() {
   };
 
   const updateProjectById = (projectId, updater) => {
-    setActiveProject((current) => current?.id === projectId ? updater(current) : current);
-    setProjects((current) => current.map((project) => project.id === projectId ? updater(project) : project));
+    if (activeProjectRef.current?.id === projectId) {
+      activeProjectRef.current = updater(activeProjectRef.current);
+      setActiveProject(activeProjectRef.current);
+    }
+    projectsRef.current = projectsRef.current.map((project) => project.id === projectId ? updater(project) : project);
+    setProjects(projectsRef.current);
   };
 
   const queueActive = (projectId, navigate = true) => {
@@ -1391,10 +1405,11 @@ export function App() {
       if (existingIndex < 0) return [queuedProject, ...current];
       return current.map((item, index) => index === existingIndex ? queuedProject : item);
     });
+    if (activeProjectRef.current?.id === queuedProject.id) activeProjectRef.current = null;
     setActiveProject((current) => current?.id === queuedProject.id ? null : current);
     setEditingProjectId((current) => current === queuedProject.id ? null : current);
     if (navigate) setPage("queue");
-    notify("已保存到内容库");
+    notify("已保存到创作台");
     return queuedProject;
   };
 
@@ -1413,10 +1428,12 @@ export function App() {
         if (existingIndex < 0) return [queuedProject, ...current];
         return current.map((item, index) => index === existingIndex ? queuedProject : item);
       });
-      setActiveProject(makeOriginalProject({ id, createdAt: formatNow() }));
+      const nextProject = makeOriginalProject({ id, createdAt: formatNow() });
+      activeProjectRef.current = nextProject;
+      setActiveProject(nextProject);
       setEditingProjectId(null);
       setPage("creation");
-      notify("当前创作已保存到内容库，并打开了新画板");
+      notify("当前创作已保存到创作台，并打开了新画板");
     } catch (error) {
       notify(error.message);
     } finally {
@@ -1740,6 +1757,163 @@ export function App() {
     return queued;
   };
 
+  const moveProjectToState = (projectId, destination) => {
+    const sourceIsArchive = destination === "projects";
+    const source = sourceIsArchive ? archiveItemsRef.current : projectsRef.current;
+    const project = source.find((item) => item.id === projectId);
+    if (!project || movingProjectIdsRef.current.has(projectId)) return Promise.resolve(false);
+    const sourceIndex = source.findIndex((item) => item.id === projectId);
+    const nextMoving = new Set(movingProjectIdsRef.current);
+    nextMoving.add(projectId);
+    movingProjectIdsRef.current = nextMoving;
+    setMovingProjectIds(nextMoving);
+    window.clearTimeout(autosaveTimerRef.current);
+
+    const movedProject = destination === "archive"
+      ? {
+          ...project,
+          creationStatus: "completed",
+          completedAt: project.completedAt || new Date().toISOString(),
+          workflow: { ...(project.workflow || {}), stage: "archived", creationStatus: "completed", completedAt: project.completedAt || new Date().toISOString() },
+        }
+      : {
+          ...project,
+          creationStatus: "in_progress",
+          completedAt: null,
+          workflow: { ...(project.workflow || {}), stage: "creating", creationStatus: "in_progress", completedAt: null },
+        };
+    if (destination === "archive") {
+      projectsRef.current = projectsRef.current.filter((item) => item.id !== projectId);
+      archiveItemsRef.current = [movedProject, ...archiveItemsRef.current.filter((item) => item.id !== projectId)];
+    } else {
+      archiveItemsRef.current = archiveItemsRef.current.filter((item) => item.id !== projectId);
+      projectsRef.current = [movedProject, ...projectsRef.current.filter((item) => item.id !== projectId)];
+    }
+    setProjects(projectsRef.current);
+    setArchiveItems(archiveItemsRef.current);
+
+    const finish = () => {
+      const next = new Set(movingProjectIdsRef.current);
+      next.delete(projectId);
+      movingProjectIdsRef.current = next;
+      setMovingProjectIds(next);
+    };
+    const commit = async () => {
+      try {
+        const endpoint = destination === "archive" ? "archive" : "restore";
+        const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/${endpoint}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-library-session-id": storage?.sessionId || "",
+            "x-library-revision": String(libraryRevisionRef.current),
+          },
+          body: JSON.stringify({ project: movedProject }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error || (!result.project && !result.alreadyMoved)) throw new Error(result.error || "更新内容状态失败");
+        const committed = result.project || movedProject;
+        if (destination === "archive") {
+          archiveItemsRef.current = archiveItemsRef.current.map((item) => item.id === projectId ? committed : item);
+          setArchiveItems(archiveItemsRef.current);
+        } else {
+          projectsRef.current = projectsRef.current.map((item) => item.id === projectId ? committed : item);
+          setProjects(projectsRef.current);
+        }
+        if (result.storage) setStorage(result.storage);
+        if (result.revision) {
+          libraryRevisionRef.current = result.revision;
+          setLibraryRevision(result.revision);
+        }
+        const savedPayload = savedLibraryPayload(lastSavedSnapshotRef.current);
+        if (savedPayload) {
+          lastSavedSnapshotRef.current = stableLibrarySnapshot({
+            ...savedPayload,
+            projects: projectsRef.current,
+            archive: archiveItemsRef.current,
+          });
+        }
+        setSaveState("saved");
+        notify(destination === "archive" ? "已完成，内容已移入归档库" : "已恢复到创作台");
+        return true;
+      } catch (error) {
+        if (sourceIsArchive) {
+          projectsRef.current = projectsRef.current.filter((item) => item.id !== projectId);
+          archiveItemsRef.current = [...archiveItemsRef.current];
+          archiveItemsRef.current.splice(Math.min(sourceIndex, archiveItemsRef.current.length), 0, project);
+        } else {
+          archiveItemsRef.current = archiveItemsRef.current.filter((item) => item.id !== projectId);
+          projectsRef.current = [...projectsRef.current];
+          projectsRef.current.splice(Math.min(sourceIndex, projectsRef.current.length), 0, project);
+        }
+        setProjects(projectsRef.current);
+        setArchiveItems(archiveItemsRef.current);
+        notify(`状态更新失败，已恢复原内容：${error.message || "请重试"}`);
+        return false;
+      } finally {
+        finish();
+      }
+    };
+    const queued = projectIndexMutationQueueRef.current.then(commit, commit);
+    projectIndexMutationQueueRef.current = queued.catch(() => {});
+    return queued;
+  };
+
+  const deleteArchivedProject = (projectId) => {
+    if (deletingProjectIdsRef.current.has(projectId)) return Promise.resolve(false);
+    const project = archiveItemsRef.current.find((item) => item.id === projectId);
+    if (!project) return Promise.resolve(false);
+    const index = archiveItemsRef.current.findIndex((item) => item.id === projectId);
+    const nextDeleting = new Set(deletingProjectIdsRef.current);
+    nextDeleting.add(projectId);
+    deletingProjectIdsRef.current = nextDeleting;
+    setDeletingProjectIds(nextDeleting);
+    archiveItemsRef.current = archiveItemsRef.current.filter((item) => item.id !== projectId);
+    setArchiveItems(archiveItemsRef.current);
+    const finish = () => {
+      const next = new Set(deletingProjectIdsRef.current);
+      next.delete(projectId);
+      deletingProjectIdsRef.current = next;
+      setDeletingProjectIds(next);
+    };
+    const commit = async () => {
+      try {
+        const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/index`, {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json",
+            "x-library-session-id": storage?.sessionId || "",
+            "x-library-revision": String(libraryRevisionRef.current),
+          },
+          body: JSON.stringify({ projectPatches: [] }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error) throw new Error(result.error || "删除索引失败");
+        if (result.storage) setStorage(result.storage);
+        if (result.revision) {
+          libraryRevisionRef.current = result.revision;
+          setLibraryRevision(result.revision);
+        }
+        const savedPayload = savedLibraryPayload(lastSavedSnapshotRef.current);
+        if (savedPayload) lastSavedSnapshotRef.current = stableLibrarySnapshot({ ...savedPayload, archive: archiveItemsRef.current });
+        setSaveState("saved");
+        notify("已删除软件索引，Eagle 文件未受影响");
+        return true;
+      } catch (error) {
+        archiveItemsRef.current = [...archiveItemsRef.current];
+        archiveItemsRef.current.splice(Math.min(index, archiveItemsRef.current.length), 0, project);
+        setArchiveItems(archiveItemsRef.current);
+        notify(`删除失败，已恢复内容：${error.message || "删除索引失败"}`);
+        return false;
+      } finally {
+        finish();
+      }
+    };
+    const queued = projectIndexMutationQueueRef.current.then(commit, commit);
+    projectIndexMutationQueueRef.current = queued.catch(() => {});
+    return queued;
+  };
+
   let main;
   if (libraryLoaded && !storage) {
     main = <ClosedLibraryWorkspace busy={libraryBusy} onAction={requestLibraryAction} />;
@@ -1792,11 +1966,27 @@ export function App() {
         onCreateContent={createContentIndex}
         onEdit={editProject}
         onDeleteProject={deleteQueuedProject}
+        onCompleteProject={(projectId) => moveProjectToState(projectId, "archive")}
         onUpdateProject={updateProjectById}
         onUploadCovers={uploadProjectCovers}
         onUploadMedia={uploadProjectMedia}
         onRemoveMedia={removeProjectMedia}
         onRevealTarget={revealProjectAsset}
+        setSidebarOpen={setSidebarOpen}
+        storage={storage}
+      />
+    );
+  } else if (page === "archive") {
+    main = (
+      <ArchivePage
+        archiveItems={archiveItems}
+        categories={categories}
+        categoryValue={categoryValue}
+        openCategoryManager={() => setCategoryManagerOpen(true)}
+        notify={notify}
+        onRevealTarget={revealProjectAsset}
+        onRestoreProject={(projectId) => moveProjectToState(projectId, "projects")}
+        onDeleteProject={deleteArchivedProject}
         setSidebarOpen={setSidebarOpen}
         storage={storage}
       />
@@ -1835,7 +2025,7 @@ export function App() {
 
   return (
     <div className="app-frame">
-      <AppSidebar page={page} setPage={setPage} queueCount={projects.length} open={sidebarOpen} setOpen={setSidebarOpen} storage={storage} saveState={saveState} libraryBusy={libraryBusy} onLibraryAction={requestLibraryAction} />
+      <AppSidebar page={page} setPage={setPage} queueCount={projects.length} archiveCount={archiveItems.length} open={sidebarOpen} setOpen={setSidebarOpen} storage={storage} saveState={saveState} libraryBusy={libraryBusy} onLibraryAction={requestLibraryAction} />
       {sidebarOpen && <button type="button" className="sidebar-scrim" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} />}
       <div className="app-content">{main}</div>
       {choiceItem && <CreationChoiceModal item={choiceItem} projects={projects} onClose={() => setChoiceItem(null)} onNew={createNew} onAdd={addToExisting} notify={notify} />}

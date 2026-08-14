@@ -134,12 +134,15 @@ export async function removeProjectIndex({ projectId, sessionId = "", expectedRe
     const projects = (current.projects || [])
       .filter((project) => project.id !== id)
       .map((project) => patchesById.has(project.id) ? applyProjectOperations(project, patchesById.get(project.id)) : project);
+    const archive = (current.archive || []).filter((project) => project.id !== id);
     const activeProject = current.activeProject?.id === id
       ? null
       : (current.activeProject && patchesById.has(current.activeProject.id)
         ? applyProjectOperations(current.activeProject, patchesById.get(current.activeProject.id))
         : current.activeProject);
-    const existed = projects.length !== (current.projects || []).length || activeProject !== current.activeProject;
+    const existed = projects.length !== (current.projects || []).length
+      || archive.length !== (current.archive || []).length
+      || activeProject !== current.activeProject;
     if (!existed) {
       return {
         payload: current,
@@ -157,6 +160,7 @@ export async function removeProjectIndex({ projectId, sessionId = "", expectedRe
       payload: {
         ...current,
         projects,
+        archive,
         activeProject,
       },
       allowDestructiveShrink: true,
@@ -173,6 +177,108 @@ export async function removeProjectIndex({ projectId, sessionId = "", expectedRe
     filesPreserved: committed.filesPreserved,
     alreadyRemoved: committed.alreadyRemoved === true,
     reconciledProjects: committed.reconciledProjects || [],
+    revision: committed.library.revision,
+    storage: committed.library.storage,
+  };
+}
+
+function projectStateError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function canonicalReferenceIds(project = {}) {
+  const candidates = [
+    ...(Array.isArray(project.relationships?.referenceContentIds) ? project.relationships.referenceContentIds : []),
+    ...(Array.isArray(project.references) ? project.references : []),
+  ];
+  return Array.from(new Set(candidates
+    .map((reference) => (typeof reference === "string" ? reference : reference?.id))
+    .map((id) => String(id || "").trim())
+    .filter((id) => /^[IC]\d{6,}$/.test(id))));
+}
+
+export async function moveProjectIndex({ projectId, destination, fallbackProject = null, sessionId = "", expectedRevision = "", libraryManager }) {
+  const id = String(projectId || "").trim();
+  const target = String(destination || "").trim();
+  if (!/^C[A-Za-z0-9._-]+$/.test(id)) throw projectStateError("内容 ID 无效");
+  if (!new Set(["archive", "projects"]).has(target)) throw projectStateError("内容状态无效");
+  // Like deletion, this is a single-ID operation rebased onto the latest
+  // library snapshot. A reader on another machine never holds this write lock.
+  void expectedRevision;
+  const committed = await libraryManager.mutateLibrary(async ({ current }) => {
+    const sourceKey = target === "archive" ? "projects" : "archive";
+    const source = Array.isArray(current[sourceKey]) ? current[sourceKey] : [];
+    const destinationItems = Array.isArray(current[target]) ? current[target] : [];
+    const sourceIndex = source.findIndex((project) => project.id === id);
+    if (sourceIndex < 0) {
+      const alreadyMoved = destinationItems.some((project) => project.id === id);
+      if (alreadyMoved || fallbackProject?.id !== id) {
+        return {
+          payload: current,
+          result: { projectId: id, destination: target, alreadyMoved },
+        };
+      }
+    }
+    // The page snapshot is authoritative for this one project. It closes the
+    // small window where an autosave is still in flight while the user clicks
+    // Complete, without replacing any other entry from the newest library.
+    const project = fallbackProject?.id === id ? fallbackProject : source[sourceIndex];
+    const movedAt = new Date().toISOString();
+    const movedProject = target === "archive"
+      ? (() => {
+          const completedAt = project.completedAt || movedAt;
+          const referenceContentIds = canonicalReferenceIds(project);
+          return {
+            ...project,
+            creationStatus: "completed",
+            completedAt,
+            archivedAt: movedAt,
+            matched: project.matched ?? false,
+            relationships: {
+              ...(project.relationships || {}),
+              referenceContentIds,
+            },
+            references: referenceContentIds,
+            referenceCount: referenceContentIds.length,
+            workflow: {
+              ...(project.workflow || {}),
+              stage: "archived",
+              creationStatus: "completed",
+              completedAt,
+            },
+          };
+        })()
+      : {
+          ...project,
+          creationStatus: "in_progress",
+          completedAt: null,
+          archivedAt: null,
+          workflow: {
+            ...(project.workflow || {}),
+            stage: "creating",
+            creationStatus: "in_progress",
+            completedAt: null,
+          },
+        };
+    return {
+      payload: {
+        ...current,
+        [sourceKey]: source.filter((project) => project.id !== id),
+        [target]: [movedProject, ...destinationItems.filter((project) => project.id !== id)],
+        activeProject: target === "archive" && current.activeProject?.id === id ? null : current.activeProject,
+      },
+      allowDestructiveShrink: true,
+      backupLabel: target === "archive" ? "archive-project-index" : "restore-project-index",
+      result: { projectId: id, destination: target, project: movedProject, alreadyMoved: false },
+    };
+  }, sessionId, "");
+  return {
+    projectId: committed.projectId,
+    destination: committed.destination,
+    project: committed.project || null,
+    alreadyMoved: committed.alreadyMoved === true,
     revision: committed.library.revision,
     storage: committed.library.storage,
   };

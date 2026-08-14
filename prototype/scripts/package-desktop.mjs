@@ -5,7 +5,6 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const APP_NAME = "视频内容创作中台.app";
 const APP_ID = "com.yinli.video-content-creation-studio";
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -46,8 +45,15 @@ async function findBuiltApp() {
   const candidates = [];
   for (const entry of directories) {
     if (!entry.isDirectory()) continue;
-    const candidate = path.join(releaseRoot, entry.name, APP_NAME);
-    if (await fs.stat(candidate).then((stat) => stat.isDirectory()).catch(() => false)) candidates.push(candidate);
+    const outputDir = path.join(releaseRoot, entry.name);
+    const apps = await fs.readdir(outputDir, { withFileTypes: true }).catch(() => []);
+    for (const app of apps) {
+      if (!app.isDirectory() || !app.name.endsWith(".app")) continue;
+      const candidate = path.join(outputDir, app.name);
+      const infoPath = path.join(candidate, "Contents", "Info.plist");
+      const appId = await output("plutil", ["-extract", "CFBundleIdentifier", "raw", "-o", "-", infoPath]).catch(() => "");
+      if (appId === APP_ID) candidates.push(candidate);
+    }
   }
   candidates.sort((left, right) => right.localeCompare(left));
   if (!candidates.length) throw new Error("Electron 构建完成，但没有找到应用产物");

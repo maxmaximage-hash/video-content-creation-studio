@@ -1060,6 +1060,56 @@
   background: rgba(255, 255, 255, .025);
 }
 
+.queue-phase1 .queue-format-body-button,
+.queue-phase1 .queue-complete-button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid rgba(214, 179, 106, .34);
+  border-radius: 6px;
+  color: #ecd59c;
+  background: rgba(214, 179, 106, .08);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.queue-phase1 .queue-format-body-button:hover:not(:disabled),
+.queue-phase1 .queue-complete-button:hover {
+  border-color: rgba(214, 179, 106, .7);
+  background: rgba(214, 179, 106, .16);
+}
+
+.queue-phase1 .queue-format-body-button:disabled { color: #77787f; border-color: rgba(255,255,255,.1); background: transparent; }
+.queue-phase1 .queue-card-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+
+.queue-format-modal {
+  width: min(880px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 32px));
+  overflow: auto;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 8px;
+  background: #1b1c21;
+  box-shadow: 0 22px 66px rgba(0,0,0,.48);
+}
+
+.queue-format-modal > header,
+.queue-format-modal > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px; }
+.queue-format-modal > header { border-bottom: 1px solid rgba(255,255,255,.1); }
+.queue-format-modal > header span { color: #aaaeb7; font-size: 11px; }
+.queue-format-modal > header h2 { margin: 3px 0 0; font-size: 16px; }
+.queue-format-modal > footer { justify-content: flex-end; border-top: 1px solid rgba(255,255,255,.1); }
+.queue-format-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 16px 18px; }
+.queue-format-compare label { display: grid; gap: 7px; color: #bdbfc6; font-size: 11px; }
+.queue-format-compare textarea { min-height: 260px; resize: vertical; padding: 10px; border: 1px solid rgba(255,255,255,.11); border-radius: 6px; color: #ececf0; background: #121317; line-height: 1.55; }
+
+@media (max-width: 680px) {
+  .queue-format-compare { grid-template-columns: 1fr; }
+  .queue-phase1 .queue-format-body-button { padding: 0 7px; font-size: 10px; }
+}
+
 .queue-phase1 .queue-account-title-row {
   min-height: 56px;
   grid-template-columns: auto minmax(0, 1fr) 32px;

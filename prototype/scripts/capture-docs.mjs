@@ -176,8 +176,8 @@ try {
   await replacePrivatePaths(page);
   await page.screenshot({ path: path.join(outputRoot, "creation.png"), fullPage: false });
 
-  await page.getByLabel("主导航").getByRole("button", { name: /待发布/ }).click();
-  await page.getByRole("heading", { name: "待发布" }).waitFor();
+  await page.getByLabel("主导航").getByRole("button", { name: /创作台/ }).click();
+  await page.getByRole("heading", { name: "创作台" }).waitFor();
   await replacePrivatePaths(page);
   await page.screenshot({ path: path.join(outputRoot, "queue.png"), fullPage: false });
 
