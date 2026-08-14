@@ -4,6 +4,7 @@ import {
   assignCoverAccountRole,
   projectAccountCopy,
   projectAccountCovers,
+  projectPrimaryCopy,
   updateProjectAccountCopy,
 } from "../src/pages/queue/content-variants.js";
 
@@ -21,6 +22,18 @@ test("account copy updates independently and blogger stays backward compatible",
   const updated = updateProjectAccountCopy(project, "blogger", { body: "博主正文" });
   assert.equal(updated.body, "博主正文");
   assert.equal(updated.accountVariants.blogger.body, "博主正文");
+});
+
+test("archive copy falls back to the first populated account version", () => {
+  const project = {
+    title: "",
+    body: "",
+    accountVariants: {
+      blogger: { title: "", body: "" },
+      ip: { title: "IP 标题", body: "IP 正文" },
+    },
+  };
+  assert.deepEqual(projectPrimaryCopy(project), { title: "IP 标题", body: "IP 正文" });
 });
 
 test("unlabelled legacy covers belong to blogger and labelled covers stay isolated", () => {

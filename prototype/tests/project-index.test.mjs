@@ -307,3 +307,38 @@ test("archive move accepts the complete project snapshot when queue autosave has
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("archive move promotes IP-only copy into the archive display fields", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-studio-index-ip-archive-"));
+  const libraryManager = createLibraryManager({ initialLibraryDir: null, qaMode: true });
+  try {
+    const opened = await libraryManager.manage("new", { path: path.join(root, "fixture.library") });
+    const project = {
+      id: "C000612",
+      title: "",
+      body: "",
+      accountVariants: { ip: { title: "只有 IP 标题", body: "只有 IP 正文" } },
+      covers: [],
+      mediaAssets: [],
+      references: [],
+      workflow: { stage: "ready_to_publish", creationStatus: "in_progress" },
+    };
+    await libraryManager.writeLibrary({ projects: [project], inspirations: [], archive: [], activeProject: null }, opened.storage.sessionId);
+
+    await moveProjectIndex({
+      projectId: project.id,
+      destination: "archive",
+      fallbackProject: project,
+      sessionId: opened.storage.sessionId,
+      libraryManager,
+    });
+
+    const persisted = await libraryManager.readLibrary();
+    assert.equal(persisted.archive[0].title, "只有 IP 标题");
+    assert.equal(persisted.archive[0].body, "只有 IP 正文");
+    assert.equal(persisted.archive[0].mediaAssets.length, 0);
+  } finally {
+    await libraryManager.dispose();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

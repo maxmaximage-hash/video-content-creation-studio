@@ -9,6 +9,7 @@ import { CreationPage } from "./pages/creation/CreationPage.jsx";
 import { InspirationsPage } from "./pages/inspirations/InspirationsPage.jsx";
 import { QueuePage } from "./pages/queue/QueuePage.jsx";
 import { ArchivePage } from "./pages/archive/ArchivePage.jsx";
+import { projectPrimaryCopy } from "./pages/queue/content-variants.js";
 import {
   clearProjectContent,
   coverSource,
@@ -1769,9 +1770,11 @@ export function App() {
     setMovingProjectIds(nextMoving);
     window.clearTimeout(autosaveTimerRef.current);
 
+    const primaryCopy = projectPrimaryCopy(project);
     const movedProject = destination === "archive"
       ? {
           ...project,
+          ...primaryCopy,
           creationStatus: "completed",
           completedAt: project.completedAt || new Date().toISOString(),
           workflow: { ...(project.workflow || {}), stage: "archived", creationStatus: "completed", completedAt: project.completedAt || new Date().toISOString() },

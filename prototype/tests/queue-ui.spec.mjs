@@ -463,19 +463,36 @@ test("card hierarchy, editable copy, large cover surfaces and button isolation",
   await expect(expanded.locator(".queue-cover-sort-handle")).toHaveCount(0);
 });
 
-test("完成内容后立即进入归档库", async ({ page, request }) => {
+test("只有 IP 号文案且没有视频的内容完成后立即进入归档库", async ({ page, request }) => {
   await openQueue(page);
   const firstCard = page.locator('[data-project-id="C000127"]');
+  await firstCard.getByLabel("博主号标题").fill("");
+  await firstCard.getByLabel("博主号正文", { exact: true }).fill("");
+  await firstCard.getByLabel("IP 号标题").fill("只有 IP 号的归档标题");
+  await firstCard.getByLabel("IP 号正文", { exact: true }).fill("只有 IP 号的归档正文");
   await firstCard.getByRole("button", { name: "完成", exact: true }).click();
   await expect(firstCard).toHaveCount(0);
   await expect.poll(async () => {
     const response = await request.get("/api/library");
     const library = await response.json();
+    const archived = library.archive.find((item) => item.id === "C000127");
     return {
       queueIds: library.projects.map((project) => project.id),
       archiveIds: library.archive.map((item) => item.id),
+      title: archived?.title,
+      body: archived?.body,
+      mediaCount: archived?.mediaAssets?.length,
     };
-  }).toEqual({ queueIds: ["C000128", "C000126"], archiveIds: ["C000127"] });
+  }).toEqual({
+    queueIds: ["C000128", "C000126"],
+    archiveIds: ["C000127"],
+    title: "只有 IP 号的归档标题",
+    body: "只有 IP 号的归档正文",
+    mediaCount: 0,
+  });
+  await page.getByRole("button", { name: "归档库", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "只有 IP 号的归档标题" })).toBeVisible();
+  await expect(page.getByText("只有 IP 号的归档正文", { exact: true })).toBeVisible();
 });
 
 test("删除按钮彻底移除待发布内容并保留其它数据", async ({ page, request }) => {

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { projectPrimaryCopy } from "../src/pages/queue/content-variants.js";
 
 function contentNumber(id) {
   const match = String(id || "").match(/^C(\d+)$/);
@@ -225,6 +226,7 @@ export async function moveProjectIndex({ projectId, destination, fallbackProject
     // small window where an autosave is still in flight while the user clicks
     // Complete, without replacing any other entry from the newest library.
     const project = fallbackProject?.id === id ? fallbackProject : source[sourceIndex];
+    const primaryCopy = projectPrimaryCopy(project);
     const movedAt = new Date().toISOString();
     const movedProject = target === "archive"
       ? (() => {
@@ -232,6 +234,7 @@ export async function moveProjectIndex({ projectId, destination, fallbackProject
           const referenceContentIds = canonicalReferenceIds(project);
           return {
             ...project,
+            ...primaryCopy,
             creationStatus: "completed",
             completedAt,
             archivedAt: movedAt,
