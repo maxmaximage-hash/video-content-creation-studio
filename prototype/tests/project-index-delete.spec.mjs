@@ -285,9 +285,13 @@ test("missing legacy local cover uses a stable placeholder instead of a broken i
 test("new content appears immediately and stays editable while its atomic create is delayed", async ({ page, request }) => {
   await seedQueueProjects(request, []);
   let submittedProject = null;
+  let releaseCreate;
+  const createBlocked = new Promise((resolve) => {
+    releaseCreate = resolve;
+  });
   await page.route("**/api/projects/index", async (route) => {
     submittedProject = route.request().postDataJSON().project;
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await createBlocked;
     await route.fulfill({
       status: 201,
       contentType: "application/json",
@@ -298,14 +302,15 @@ test("new content appears immediately and stays editable while its atomic create
   await page.getByRole("button", { name: "创作台" }).click();
   await page.getByRole("button", { name: "新建第一条内容", exact: true }).click();
   const card = page.locator("[data-project-id]");
-  await expect(card).toHaveCount(1, { timeout: 500 });
+  await expect(card).toHaveCount(1);
   const id = await card.getAttribute("data-project-id");
   expect(id).toMatch(/^C\d{6,}$/);
   const title = card.getByLabel("博主号标题");
   await expect(title).toBeFocused();
   await title.fill("延迟创建时也能编辑");
   await expect(title).toHaveValue("延迟创建时也能编辑");
-  await page.waitForTimeout(2100);
+  await expect.poll(() => submittedProject?.id).toBe(id);
+  releaseCreate();
   await expect(card.getByLabel("博主号标题")).toHaveValue("延迟创建时也能编辑");
   await expect(page.locator(".toast")).toContainText("已新建");
 });
