@@ -1927,7 +1927,14 @@ export function App() {
   };
 
   let main;
-  if (libraryLoaded && !storage) {
+  if (!libraryLoaded) {
+    main = (
+      <div className="empty-state" role="status" aria-live="polite">
+        <div className="empty-icon"><FolderOpen size={20} /></div>
+        <h2>正在打开资料库</h2>
+      </div>
+    );
+  } else if (!storage) {
     main = <ClosedLibraryWorkspace busy={libraryBusy} onAction={requestLibraryAction} />;
   } else if (page === "creation") {
     main = (

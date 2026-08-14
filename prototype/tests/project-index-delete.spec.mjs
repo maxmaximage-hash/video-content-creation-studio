@@ -284,6 +284,15 @@ test("missing legacy local cover uses a stable placeholder instead of a broken i
 
 test("new content appears immediately and stays editable while its atomic create is delayed", async ({ page, request }) => {
   await seedQueueProjects(request, []);
+  let releaseLibrary;
+  const libraryBlocked = new Promise((resolve) => {
+    releaseLibrary = resolve;
+  });
+  await page.route("**/api/library", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    await libraryBlocked;
+    return route.continue();
+  });
   let submittedProject = null;
   let releaseCreate;
   const createBlocked = new Promise((resolve) => {
@@ -300,7 +309,12 @@ test("new content appears immediately and stays editable while its atomic create
   });
   await page.goto("/");
   await page.getByRole("button", { name: "创作台" }).click();
-  await page.getByRole("button", { name: "新建第一条内容", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("正在打开资料库");
+  const createButton = page.getByRole("button", { name: "新建第一条内容", exact: true });
+  await expect(createButton).toHaveCount(0);
+  releaseLibrary();
+  await expect(createButton).toBeVisible();
+  await createButton.click();
   const card = page.locator("[data-project-id]");
   await expect(card).toHaveCount(1);
   const id = await card.getAttribute("data-project-id");
