@@ -5,11 +5,11 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from "e
 import { preview } from "vite";
 import { libraryApiPlugin } from "../vite.config.mjs";
 import { DEFAULT_LIBRARY_NAME } from "../server/library-manager.mjs";
+import { APP_PRODUCT_NAME, LEGACY_USER_DATA_NAME } from "./app-identity.mjs";
 import { resolveDragFile } from "./file-drag.mjs";
 import { createReusableServerLifecycle } from "./server-lifecycle.mjs";
 
-const APP_NAME = "Video Hub";
-const LEGACY_USER_DATA_NAME = "视频内容创作中台";
+const APP_NAME = APP_PRODUCT_NAME;
 const smokeTest = process.argv.includes("--smoke-test");
 let mainWindow = null;
 let activeLibraryDir = null;

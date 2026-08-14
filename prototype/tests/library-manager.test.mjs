@@ -62,7 +62,7 @@ test("invalid libraries and rename collisions are rejected without changing the 
   const invalidDir = path.join(root, "其他.library");
   await fs.mkdir(invalidDir);
   await fs.writeFile(path.join(invalidDir, "library.json"), JSON.stringify({ libraryKind: "other-product" }));
-  await assert.rejects(manager.manage("open", { path: invalidDir }), /不是视频内容创作中台资料库/);
+  await assert.rejects(manager.manage("open", { path: invalidDir }), /不是 Video Hub 资料库/);
 
   const collisionDir = path.join(root, "已存在.library");
   await fs.mkdir(collisionDir);

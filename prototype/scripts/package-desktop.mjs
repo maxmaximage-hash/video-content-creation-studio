@@ -4,8 +4,9 @@ import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { APP_BUNDLE_ID } from "../desktop/app-identity.mjs";
 
-const APP_ID = "com.yinli.video-content-creation-studio";
+const APP_ID = APP_BUNDLE_ID;
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 function argument(name) {

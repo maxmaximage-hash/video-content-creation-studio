@@ -484,7 +484,7 @@ export function createLibraryManager(options = {}) {
     } catch {
       throw libraryError("library.json 无法读取或格式损坏");
     }
-    if (data.libraryKind !== LIBRARY_KIND) throw libraryError("这不是视频内容创作中台资料库");
+    if (data.libraryKind !== LIBRARY_KIND) throw libraryError("这不是 Video Hub 资料库");
     return { paths: selected, data };
   }
 
@@ -509,7 +509,7 @@ export function createLibraryManager(options = {}) {
         cause: error.code || "INDEX_PARSE_FAILED",
       });
     }
-    if (data.libraryKind && data.libraryKind !== LIBRARY_KIND) throw libraryError("当前目录不是视频内容创作中台资料库", 409);
+    if (data.libraryKind && data.libraryKind !== LIBRARY_KIND) throw libraryError("当前目录不是 Video Hub 资料库", 409);
     delete data.inspirationTombstones;
     revision = Number(data.libraryRevision) || 1;
     return {

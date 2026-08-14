@@ -2,7 +2,7 @@
 
 一个面向真实内容生产流程的本地优先 macOS 桌面应用。它把抖音、小红书、B 站、视频号、YouTube 和 Instagram 灵感采集、内容创作、双账号素材管理、创作台整理和完成归档放进同一个 `.library` 资料库。
 
-当前用户版本：**V1.2**（内部构建版本 `1.2.0`）
+当前用户版本：**V1.3**（内部构建版本 `1.3.0`）
 
 [![macOS CI](https://github.com/maxmaximage-hash/video-content-creation-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/maxmaximage-hash/video-content-creation-studio/actions/workflows/ci.yml)
 
@@ -112,7 +112,7 @@ npm run desktop:install
 2. 构建 React/Vite 前端。
 3. 按当前 Mac 架构封装 Electron 应用。
 4. 使用本机 ad-hoc 签名并严格校验。
-5. 只在 Bundle ID 匹配时更新 `/Applications/视频内容创作中台.app`。
+5. 只在 Bundle ID 匹配时更新 `/Applications/Video Hub.app`，并安全移除同一应用的旧中文名称副本。
 6. 安装成功后删除临时旧应用，不留下可误启动的第二份。
 7. 保留所有现有 `.library` 和平台登录 profile。
 
@@ -186,6 +186,8 @@ npm run desktop:install
 ## 多电脑与 NAS
 
 当前版本允许把 Library 放在 NAS，但只支持一个写入端。两台电脑可以只读查看同一 Library，不应同时编辑，因为当前版本没有跨机器事务和文件锁。
+
+Eagle 使用项目固定连接：另一台电脑需要启动 Eagle，并挂载同一团队 Eagle 资料库到项目约定路径；素材文件夹 ID 和本机 API 端口由代码统一维护，不需要在 Video Hub 中重新配置。
 
 团队多 PC 同时编辑和手机采集需要部署唯一协作服务；这不是当前公开桌面版本的一部分。直接让两台桌面应用同时写同一个 NAS Library 可能发生最后写入覆盖。
 

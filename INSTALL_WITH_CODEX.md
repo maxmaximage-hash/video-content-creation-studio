@@ -5,7 +5,7 @@
 ## 最终目标
 
 - 源码仓库：`https://github.com/maxmaximage-hash/video-content-creation-studio`
-- 应用路径：`/Applications/视频内容创作中台.app`
+- 应用路径：`/Applications/Video Hub.app`
 - Bundle ID：`com.yinli.video-content-creation-studio`
 - 资料库：由用户在首次启动时新建或打开，不由安装脚本创建真实业务数据。
 - 登录 profile：`~/Library/Application Support/视频内容创作中台/auth-browser/`
@@ -98,9 +98,9 @@ npm run desktop:install
 安装后只读核对：
 
 ```bash
-plutil -p '/Applications/视频内容创作中台.app/Contents/Info.plist' \
+plutil -p '/Applications/Video Hub.app/Contents/Info.plist' \
   | grep -E 'CFBundleIdentifier|CFBundleDisplayName|CFBundleShortVersionString'
-codesign --verify --deep --strict '/Applications/视频内容创作中台.app'
+codesign --verify --deep --strict '/Applications/Video Hub.app'
 mdfind 'kMDItemCFBundleIdentifier == "com.yinli.video-content-creation-studio"'
 ```
 
@@ -117,7 +117,7 @@ npm run version:status
 ## 6. 首次启动
 
 ```bash
-open '/Applications/视频内容创作中台.app'
+open '/Applications/Video Hub.app'
 ```
 
 预期：
@@ -139,7 +139,7 @@ open '/Applications/视频内容创作中台.app'
 
 ## 8. 真实应用验收
 
-必须在 `/Applications/视频内容创作中台.app` 中完成。让用户提供自己有权访问的真实作品与主页链接，只对本版本实际涉及的平台分别验证：
+必须在 `/Applications/Video Hub.app` 中完成。让用户提供自己有权访问的真实作品与主页链接，只对本版本实际涉及的平台分别验证：
 
 1. 链接只生成一个灵感 ID，不重复建卡。
 2. 标题、正文、作者、互动数据和媒体与目标作品一致。
@@ -160,7 +160,7 @@ open '/Applications/视频内容创作中台.app'
 源码目录：
 版本：
 Git commit：
-应用路径：/Applications/视频内容创作中台.app
+应用路径：/Applications/Video Hub.app
 Bundle ID：com.yinli.video-content-creation-studio
 架构：
 签名验证：

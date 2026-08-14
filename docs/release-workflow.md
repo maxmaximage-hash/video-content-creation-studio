@@ -58,7 +58,7 @@ npm run build
 npm run desktop:install
 ```
 
-然后在 `/Applications/视频内容创作中台.app` 中完成真实应用验收，并核对界面版本号。只有以下条件都满足才进入发布：
+然后在 `/Applications/Video Hub.app` 中完成真实应用验收，并核对界面版本号。只有以下条件都满足才进入发布：
 
 - 本轮功能在真实安装版中可用。
 - 用户指定的真实平台链接完成实际采集；未涉及采集的版本明确记录“不适用”。
@@ -84,7 +84,7 @@ npm run release:check
 ```bash
 git switch main
 git merge --ff-only codex/vX.Y.Z-workbench
-git tag -a vX.Y.Z -m "视频内容创作中台 vX.Y.Z"
+git tag -a vX.Y.Z -m "Video Hub vX.Y.Z"
 git push origin main
 git push origin vX.Y.Z
 ```

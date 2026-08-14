@@ -370,7 +370,7 @@ test("正文规整后立即完成仍归档最新内容", async ({ page, request 
 
 test("card hierarchy, editable copy, large cover surfaces and button isolation", async ({ page, request }) => {
   await openQueue(page);
-  await expect(page.locator(".brand-copy span")).toHaveText("V1.2");
+  await expect(page.locator(".brand-copy span")).toHaveText("V1.3");
 
   const firstCard = page.locator('[data-project-id="C000127"]');
   await expect(firstCard.locator(".queue-card-number")).toHaveText("01");
