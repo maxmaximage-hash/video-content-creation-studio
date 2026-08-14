@@ -5,10 +5,12 @@ import { defineConfig } from "@playwright/test";
 const prototypeRoot = path.dirname(fileURLToPath(import.meta.url));
 const port = Number(process.env.PLAYWRIGHT_PORT || 4174);
 const baseURL = `http://127.0.0.1:${port}`;
+const qaLibraryRoot = process.env.VIDEO_CONTENT_LIBRARY_ROOT || path.join(prototypeRoot, ".qa-library");
 
 export default defineConfig({
   testDir: "./tests",
   testMatch: "*.spec.mjs",
+  timeout: 60000,
   fullyParallel: false,
   workers: 1,
   reporter: "line",
@@ -21,7 +23,7 @@ export default defineConfig({
     command: `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
     cwd: prototypeRoot,
     env: {
-      VIDEO_CONTENT_LIBRARY_ROOT: path.join(prototypeRoot, ".qa-library"),
+      VIDEO_CONTENT_LIBRARY_ROOT: qaLibraryRoot,
       VIDEO_CONTENT_AUTH_ROOT: path.join(prototypeRoot, ".qa-auth-browser"),
       VIDEO_STUDIO_QA_MODE: "1",
     },

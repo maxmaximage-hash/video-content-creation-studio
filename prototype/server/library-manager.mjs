@@ -364,8 +364,8 @@ async function syncContentUnits(paths, data) {
 }
 
 export function createLibraryManager(options = {}) {
-  const allowImplicitCreate = options.allowImplicitCreate === true;
   const qaMode = options.qaMode === true || process.env.VIDEO_STUDIO_QA_MODE === "1";
+  const allowImplicitCreate = options.allowImplicitCreate === true || qaMode;
   const configuredLibraryRoot = String(process.env.VIDEO_CONTENT_LIBRARY_ROOT || "").trim();
   const configuredInitialLibraryDir = options.initialLibraryDir === undefined
     ? (configuredLibraryRoot ? path.join(configuredLibraryRoot, DEFAULT_LIBRARY_NAME) : null)

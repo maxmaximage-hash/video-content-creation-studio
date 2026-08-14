@@ -2,9 +2,11 @@ import { expect, test } from "@playwright/test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_LIBRARY_NAME } from "../server/library-manager.mjs";
 
 const prototypeRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const defaultLibraryDir = path.join(prototypeRoot, ".qa-library", "视频内容创作中台 Demo.library");
+const qaLibraryRoot = process.env.VIDEO_CONTENT_LIBRARY_ROOT || path.join(prototypeRoot, ".qa-library");
+const defaultLibraryDir = path.join(qaLibraryRoot, DEFAULT_LIBRARY_NAME);
 const managementRoot = path.join(prototypeRoot, ".qa-library-management");
 
 test("library controls rename, close and reopen a real isolated library", async ({ page, request }) => {

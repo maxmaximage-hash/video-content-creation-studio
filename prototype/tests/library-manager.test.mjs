@@ -6,6 +6,19 @@ import test from "node:test";
 import { createLibraryManager, LIBRARY_FOLDERS, LIBRARY_KIND } from "../server/library-manager.mjs";
 import { createLibraryWriteLease } from "../server/library-lock.mjs";
 
+test("QA mode creates its isolated library on a fresh machine", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-library-fresh-qa-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const libraryDir = path.join(root, "Video Hub QA.library");
+  const manager = createLibraryManager({ initialLibraryDir: libraryDir, qaMode: true });
+  t.after(() => manager.dispose());
+
+  const library = await manager.readLibrary();
+  assert.equal(library.libraryOpen, true);
+  assert.equal(library.storage.libraryDir, libraryDir);
+  assert.equal(JSON.parse(await fs.readFile(path.join(libraryDir, "library.json"), "utf8")).libraryKind, LIBRARY_KIND);
+});
+
 test("new, rename, close and reopen preserve one library without stale writes", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "video-library-manager-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

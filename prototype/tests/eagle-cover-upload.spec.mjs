@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import { DEFAULT_LIBRARY_NAME } from "../server/library-manager.mjs";
 
 const projectId = "C009991";
 const folderId = "MS8R943CBJV6L";
@@ -49,7 +50,8 @@ test("三张博主号封面逐文件导入 Eagle 后才显示并写入索引", a
     return Array.isArray(payload.data) ? payload.data : [];
   };
   const before = await listEagleItems();
-  const qaCoverDirectory = path.join(process.cwd(), ".qa-library", "视频内容创作中台 Demo.library", "content-units", projectId, "covers");
+  const qaLibraryRoot = process.env.VIDEO_CONTENT_LIBRARY_ROOT || path.join(process.cwd(), ".qa-library");
+  const qaCoverDirectory = path.join(qaLibraryRoot, DEFAULT_LIBRARY_NAME, "content-units", projectId, "covers");
   const localCoverFilesBefore = await filesBelow(qaCoverDirectory);
 
   const seed = await request.post("/api/library", {

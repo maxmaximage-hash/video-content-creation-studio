@@ -2,8 +2,10 @@ import { expect, test } from "@playwright/test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_LIBRARY_NAME } from "../server/library-manager.mjs";
 
 const prototypeRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const qaLibraryRoot = process.env.VIDEO_CONTENT_LIBRARY_ROOT || path.join(prototypeRoot, ".qa-library");
 
 const covers = [
   "/assets/covers/coffee-alley.png",
@@ -370,7 +372,7 @@ test("正文规整后立即完成仍归档最新内容", async ({ page, request 
 
 test("card hierarchy, editable copy, large cover surfaces and button isolation", async ({ page, request }) => {
   await openQueue(page);
-  await expect(page.locator(".brand-copy span")).toHaveText("V1.3");
+  await expect(page.locator(".brand-copy span")).toHaveText("V1.4");
 
   const firstCard = page.locator('[data-project-id="C000127"]');
   await expect(firstCard.locator(".queue-card-number")).toHaveText("01");
@@ -674,7 +676,7 @@ test("视频灵感预览默认开声，用户可手动关闭", async ({ page, re
 });
 
 test("本地视频文件支持 Range 分段读取", async ({ request }) => {
-  const videoDir = path.join(prototypeRoot, ".qa-library", "视频内容创作中台 Demo.library", "assets/videos");
+  const videoDir = path.join(qaLibraryRoot, DEFAULT_LIBRARY_NAME, "assets/videos");
   await mkdir(videoDir, { recursive: true });
   await writeFile(path.join(videoDir, "range-test.mp4"), Buffer.alloc(128 * 1024, 7));
 

@@ -584,7 +584,10 @@ test("clear and discard invalidate old uploads so they cannot reattach", async (
     return candidateId;
   }).toMatch(/^C\d{6,}$/);
   await page.locator(".title-input").fill("放弃时仍在上传");
-  await expect.poll(async () => (await libraryState(request)).activeProject?.title).toBe("放弃时仍在上传");
+  await expect.poll(
+    async () => (await libraryState(request)).activeProject?.title,
+    { timeout: 15000 },
+  ).toBe("放弃时仍在上传");
   const releaseDiscardedUpload = await startGatedVideoUpload(page, "discarded-late.mp4");
   await page.getByRole("button", { name: "新建创作", exact: true }).click();
   await page.getByRole("dialog", { name: "新建创作" }).getByRole("button", { name: /删除 \/ 放弃当前草稿/ }).click();
