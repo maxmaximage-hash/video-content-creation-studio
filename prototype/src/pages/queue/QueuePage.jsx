@@ -425,9 +425,11 @@ function CoverStack({
           </button>
         )}
       </div>
-      <div className="queue-cover-gallery-header" data-no-sort>
-        <span>{covers.length ? `${covers.length} 张封面` : "添加封面"}</span>
-      </div>
+      {covers.length > 0 && (
+        <div className="queue-cover-gallery-header" data-no-sort>
+          <span>{covers.length} 张封面</span>
+        </div>
+      )}
     </div>
   );
 }

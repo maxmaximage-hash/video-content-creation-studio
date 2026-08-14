@@ -453,7 +453,7 @@ function AppSidebar({ page, setPage, queueCount, archiveCount, open, setOpen, st
         <div className="brand-mark"><img src="/app-icon.png" alt="" /></div>
         <div className="brand-copy">
           <strong>Video Hub</strong>
-          <span>创作台</span>
+          <span>{`v${__APP_VERSION__}`}</span>
         </div>
         <IconButton label="收起导航" className="mobile-close" onClick={() => setOpen(false)}>
           <X size={18} />

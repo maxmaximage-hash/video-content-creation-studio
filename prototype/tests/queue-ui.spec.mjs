@@ -326,6 +326,7 @@ test("正文规整后立即完成仍归档最新内容", async ({ page, request 
 
 test("card hierarchy, editable copy, large cover surfaces and button isolation", async ({ page, request }) => {
   await openQueue(page);
+  await expect(page.locator(".brand-copy span")).toHaveText("v1.1.0");
 
   const firstCard = page.locator('[data-project-id="C000127"]');
   await expect(firstCard.locator(".queue-card-number")).toHaveText("01");
@@ -335,6 +336,9 @@ test("card hierarchy, editable copy, large cover surfaces and button isolation",
   await expect(firstCard.locator(".queue-card-header")).toContainText("正在创作");
   await expect(firstCard.getByLabel("一条视频从选题到开拍的 24 小时分类")).toHaveValue("教程");
   await expect(firstCard.getByTestId("collapsed-covers-C000127")).toContainText("2 张封面");
+  const emptyIpCovers = firstCard.getByTestId("collapsed-covers-C000127-ip");
+  await expect(emptyIpCovers.getByText("添加封面", { exact: true })).toHaveCount(1);
+  await expect(emptyIpCovers.locator(".queue-cover-gallery-header")).toHaveCount(0);
   await expect(firstCard.getByLabel("博主号标题", { exact: true })).toHaveValue(projects[0].title);
   await expect(firstCard.getByLabel("博主号正文", { exact: true })).toHaveValue(projects[0].body);
 
