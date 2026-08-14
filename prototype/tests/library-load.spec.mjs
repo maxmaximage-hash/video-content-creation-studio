@@ -160,7 +160,7 @@ test("a real creation edit still autosaves after a read-only cold startup", asyn
   expect(writeRequests).toBe(0);
   expect(sha256(await fs.readFile(indexPath))).toBe(sha256(before));
 
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
   await page.locator(".title-input").fill("用户修改后的标题");
   await expect.poll(async () => {
     const current = await (await request.get("/api/library")).json();

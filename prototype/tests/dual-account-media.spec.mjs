@@ -60,11 +60,12 @@ test("four Eagle account slots persist through creation, queue, and archive", as
     };
   });
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 
   await uploadByButton(page, "原素材 · 博主号", "source-blogger.mp4");
-  await uploadByButton(page, "原素材 · IP 号", "source-ip.mp4");
   await uploadByButton(page, "成品视频 · 博主号", "finished-blogger.mp4");
+  await page.getByLabel("编辑账号").getByRole("button", { name: "IP 号", exact: true }).click();
+  await uploadByButton(page, "原素材 · IP 号", "source-ip.mp4");
 
   const finishedIpSlot = page.getByRole("button", { name: "上传成品视频 · IP 号", exact: true });
   await finishedIpSlot.evaluate((element) => {
@@ -88,7 +89,7 @@ test("four Eagle account slots persist through creation, queue, and archive", as
     "source_video:blogger",
     "source_video:ip",
   ]);
-  await expect(page.locator(".project-media-slot.has-media")).toHaveCount(4);
+  await expect(page.locator(".project-media-slot.has-media")).toHaveCount(2);
 
   await page.getByRole("button", { name: "保存到创作台", exact: true }).click();
   const queueCard = page.locator(`[data-project-id="${projectId}"]`);

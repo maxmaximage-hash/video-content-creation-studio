@@ -47,7 +47,7 @@ test("uploaded cover opens full preview and persists through queue and archive",
   page.on("pageerror", (error) => browserErrors.push(error.message));
 
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
   const fileChooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "添加封面", exact: true }).click();
   const fileChooser = await fileChooserPromise;
@@ -105,7 +105,7 @@ test("uploaded cover opens full preview and persists through queue and archive",
 
 test("frameless cover target accepts external image drops", async ({ page, request }) => {
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 
   const uploadButton = page.getByRole("button", { name: "添加封面", exact: true });
   await expect(uploadButton).toBeVisible();
@@ -141,7 +141,7 @@ test("frameless cover target accepts external image drops", async ({ page, reque
 
 test("source and dynamic finished videos persist as one content unit and appear in the publish handoff", async ({ page, request }) => {
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 
   const sourceChooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "上传原素材 · 博主号", exact: true }).click();
@@ -167,6 +167,7 @@ test("source and dynamic finished videos persist as one content unit and appear 
   }).toBe(1);
   await expect(page.locator(".project-media-slot.has-media").getByText("成品视频 · 博主号", { exact: true })).toHaveCount(1);
 
+  await page.getByLabel("编辑账号").getByRole("button", { name: "IP 号", exact: true }).click();
   const secondFinishedChooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "上传成品视频 · IP 号", exact: true }).click();
   const secondFinishedChooser = await secondFinishedChooserPromise;
@@ -175,7 +176,7 @@ test("source and dynamic finished videos persist as one content unit and appear 
     mimeType: "video/mp4",
     buffer: Buffer.from("00000020ftypisomFINISHED-B"),
   });
-  await expect(page.locator(".project-media-slot.has-media").getByText(/成品视频 ·/)).toHaveCount(2);
+  await expect(page.locator(".project-media-slot.has-media").getByText("成品视频 · IP 号", { exact: true })).toHaveCount(1);
 
   let library;
   await expect.poll(async () => {
@@ -230,7 +231,7 @@ test("an in-progress video upload survives navigation away from creation", async
   });
 
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "上传成品视频 · 博主号", exact: true }).click();
@@ -247,7 +248,7 @@ test("an in-progress video upload survives navigation away from creation", async
 
   await page.getByLabel("主导航").getByRole("button", { name: "创作台", exact: true }).click();
   await expect(page.getByRole("heading", { name: "创作台", exact: true })).toBeVisible();
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 
   await expect(page.locator(".project-media-progress")).toBeVisible();
   await expect(page.locator(".project-media-slot.has-media")).toHaveCount(0);

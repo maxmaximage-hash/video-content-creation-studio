@@ -1060,6 +1060,31 @@
   background: rgba(255, 255, 255, .025);
 }
 
+.queue-phase1 .queue-account-body-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.queue-phase1 .queue-account-body-actions > .icon-button {
+  width: 30px;
+  height: 30px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.queue-phase1 .queue-account-body-actions > .queue-edit-account-button {
+  color: #ecd59c;
+  border-color: rgba(214, 179, 106, .32);
+  background: rgba(214, 179, 106, .08);
+}
+
+.queue-phase1 .queue-account-body-actions > .queue-edit-account-button:hover {
+  border-color: rgba(214, 179, 106, .68);
+  background: rgba(214, 179, 106, .16);
+}
+
 .queue-phase1 .queue-format-body-button,
 .queue-phase1 .queue-complete-button {
   min-height: 30px;

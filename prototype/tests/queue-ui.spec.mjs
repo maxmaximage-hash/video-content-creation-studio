@@ -112,6 +112,50 @@ async function openQueue(page) {
   await expect(page.locator("[data-project-id]")).toHaveCount(3);
 }
 
+test("账号编辑入口穿透到同一项目并同步回创作台", async ({ page, request }) => {
+  await openQueue(page);
+  const card = page.locator('[data-project-id="C000127"]');
+  const bloggerTitle = await card.getByLabel("博主号标题", { exact: true }).inputValue();
+  const bloggerBody = await card.getByLabel("博主号正文", { exact: true }).inputValue();
+
+  await card.getByRole("button", { name: "编辑IP 号内容", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "编辑", exact: true })).toBeVisible();
+  await expect(page.getByLabel("编辑账号").getByRole("button", { name: "IP 号", exact: true })).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByLabel("IP 号编辑标题").fill("IP 号深度编排标题");
+  await page.getByLabel("IP 号编辑正文").fill("这是只属于 IP 号的深度编排正文。\n\n不会覆盖博主号内容。");
+  await page.getByRole("button", { name: "添加灵感", exact: true }).click();
+  await page.getByRole("dialog", { name: "添加灵感参考" }).getByRole("button", { name: /灵感标题只应出现在参考卡片中/ }).click();
+  await page.getByRole("button", { name: "完成编辑", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "创作台", exact: true })).toBeVisible();
+  const updatedCard = page.locator('[data-project-id="C000127"]');
+  await expect(updatedCard.getByLabel("IP 号标题", { exact: true })).toHaveValue("IP 号深度编排标题");
+  await expect(updatedCard.getByLabel("IP 号正文", { exact: true })).toHaveValue("这是只属于 IP 号的深度编排正文。\n\n不会覆盖博主号内容。");
+  await expect(updatedCard.getByLabel("博主号标题", { exact: true })).toHaveValue(bloggerTitle);
+  await expect(updatedCard.getByLabel("博主号正文", { exact: true })).toHaveValue(bloggerBody);
+
+  await expect.poll(async () => {
+    const library = await (await request.get("/api/library")).json();
+    const project = library.projects.find((item) => item.id === "C000127");
+    return {
+      rootTitle: project?.title,
+      ipTitle: project?.accountVariants?.ip?.title,
+      ipBody: project?.accountVariants?.ip?.body,
+      referenceIds: project?.references?.map((item) => item.id),
+      stage: project?.workflow?.stage,
+      archiveCount: library.archive.length,
+    };
+  }).toEqual({
+    rootTitle: bloggerTitle,
+    ipTitle: "IP 号深度编排标题",
+    ipBody: "这是只属于 IP 号的深度编排正文。\n\n不会覆盖博主号内容。",
+    referenceIds: ["I000101", "I000102", "I000301"],
+    stage: "ready_to_publish",
+    archiveCount: 0,
+  });
+});
+
 async function order(page) {
   return page.locator("[data-project-id]").evaluateAll((cards) => cards.map((card) => card.dataset.projectId));
 }
@@ -326,7 +370,7 @@ test("正文规整后立即完成仍归档最新内容", async ({ page, request 
 
 test("card hierarchy, editable copy, large cover surfaces and button isolation", async ({ page, request }) => {
   await openQueue(page);
-  await expect(page.locator(".brand-copy span")).toHaveText("V1.1");
+  await expect(page.locator(".brand-copy span")).toHaveText("V1.2");
 
   const firstCard = page.locator('[data-project-id="C000127"]');
   await expect(firstCard.locator(".queue-card-number")).toHaveText("01");
@@ -704,7 +748,7 @@ test("创作页可以从灵感库手动添加灵感参考", async ({ page, reque
   });
 
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
   await expect(page.locator(".creation-reference-grid .inspiration-card")).toHaveCount(0);
   await page.getByRole("button", { name: "添加灵感", exact: true }).click();
   const picker = page.getByRole("dialog", { name: "添加灵感参考" });
@@ -779,7 +823,7 @@ test("创作页灵感参考保持固定三列和统一卡片宽度", async ({ pa
     },
   });
   await page.goto("/");
-  await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByRole("navigation", { name: "主导航" }).getByRole("button", { name: "编辑", exact: true }).click();
   const grid = page.locator(".creation-reference-grid");
   await expect(grid.locator(".inspiration-card")).toHaveCount(3);
   const flowStyle = await grid.evaluate((element) => {

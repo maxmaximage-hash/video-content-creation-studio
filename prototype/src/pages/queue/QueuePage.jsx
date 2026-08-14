@@ -24,6 +24,7 @@ import {
   ImagePlus,
   Menu,
   Pause,
+  PencilLine,
   Play,
   Plus,
   RefreshCw,
@@ -678,6 +679,7 @@ function AccountContentColumn({
   onFormatBody,
   onUndoBodyFormat,
   canUndoBodyFormat,
+  onEdit,
 }) {
   const copy = projectAccountCopy(project, accountRole);
   const covers = projectAccountCovers(project, accountRole, projectCoverCandidates(project));
@@ -706,22 +708,31 @@ function AccountContentColumn({
           aria-label={`${accountLabel}正文`}
           onChange={(event) => updateCopy("body", event.target.value)}
         />
-        <button
-          type="button"
-          className="queue-format-body-button"
-          aria-label={`规整${accountLabel}正文格式`}
-          title="格式规整"
-          onClick={() => onFormatBody(project, accountRole, copy.body)}
-          disabled={!copy.body}
-        >
-          <WandSparkles size={16} />
-        </button>
-        {canUndoBodyFormat && (
-          <QueueIconButton label={`撤销${accountLabel}正文格式规整`} onClick={() => onUndoBodyFormat(project, accountRole)}>
-            <Undo2 size={15} />
+        <div className="queue-account-body-actions">
+          <QueueIconButton
+            label={`编辑${accountLabel}内容`}
+            className="queue-edit-account-button"
+            onClick={() => onEdit(project, accountRole)}
+          >
+            <PencilLine size={16} />
           </QueueIconButton>
-        )}
-        <QueueCopyButton value={copy.body} notify={notify} />
+          <button
+            type="button"
+            className="queue-format-body-button"
+            aria-label={`规整${accountLabel}正文格式`}
+            title="格式规整"
+            onClick={() => onFormatBody(project, accountRole, copy.body)}
+            disabled={!copy.body}
+          >
+            <WandSparkles size={16} />
+          </button>
+          {canUndoBodyFormat && (
+            <QueueIconButton label={`撤销${accountLabel}正文格式规整`} onClick={() => onUndoBodyFormat(project, accountRole)}>
+              <Undo2 size={15} />
+            </QueueIconButton>
+          )}
+          <QueueCopyButton value={copy.body} notify={notify} />
+        </div>
       </div>
       <div className="queue-account-assets">
         <CoverStack
@@ -801,6 +812,7 @@ function QueueCardContent({
   onFormatBody,
   onUndoBodyFormat,
   formattedBodyUndo,
+  onEdit,
 }) {
   const mediaProjection = projectMediaSlotProjection(project);
   const uploads = mediaUploads[project.id] || {};
@@ -858,6 +870,7 @@ function QueueCardContent({
             onFormatBody={onFormatBody}
             onUndoBodyFormat={onUndoBodyFormat}
             canUndoBodyFormat={Boolean(formattedBodyUndo[`${project.id}:${variant.id}`])}
+            onEdit={onEdit}
           />
         ))}
       </div>
@@ -1027,6 +1040,7 @@ export function QueuePage({
   mediaUploads,
   notify,
   onCreateContent,
+  onEdit,
   onDeleteProject,
   onCompleteProject,
   onUpdateProject,
@@ -1344,6 +1358,7 @@ export function QueuePage({
                   sessionId={storage?.sessionId || ""}
                   mediaUploads={mediaUploads}
                   notify={notify}
+                  onEdit={onEdit}
                   onToggleAccount={(accountRole) => {
                     const key = `${project.id}:${accountRole}`;
                     setExpanded((current) => current === key ? null : key);

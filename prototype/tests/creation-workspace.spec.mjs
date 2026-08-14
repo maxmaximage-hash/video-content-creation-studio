@@ -94,7 +94,7 @@ async function seedInspirationEntryLibrary(request) {
 
 async function openCreation(page) {
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 }
 
 async function libraryState(request) {
@@ -198,7 +198,7 @@ test("creation covers support pointer and keyboard sorting without external drop
   }).toEqual(["coffee.png", "creator.png", "mountain.png", "external-after-sort.png"]);
 
   await page.reload();
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
   await expect(page.locator(".cover-option")).toHaveCount(4);
   expect(await page.locator(".cover-option").evaluateAll((covers) => covers.map((cover) => cover.dataset.coverId))).toEqual(
     library.activeProject.covers.map((cover) => cover.id),
@@ -520,7 +520,7 @@ test("new creation handles cancel, queue, empty canvas, discard, restart, and ne
   expect(new Set(["C009901", firstNewId, secondNewId, thirdNewId]).size).toBe(4);
 
   await page.reload();
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
   await page.getByRole("button", { name: "新建创作", exact: true }).click();
   let fourthNewId;
   await expect.poll(async () => {

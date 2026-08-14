@@ -73,7 +73,7 @@ test("三张博主号封面逐文件导入 Eagle 后才显示并写入索引", a
   expect(seed.ok()).toBeTruthy();
 
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "添加封面", exact: true }).click();
   const chooser = await chooserPromise;

@@ -58,7 +58,7 @@ const appBuildLabel = `${appVersionLabel} · ${__APP_COMMIT__}${__APP_DIRTY__ ? 
 
 const navItems = [
   { id: "inspirations", label: "灵感库", icon: Lightbulb },
-  { id: "creation", label: "创作", icon: PencilLine },
+  { id: "creation", label: "编辑", icon: PencilLine },
   { id: "queue", label: "创作台", icon: Inbox },
   { id: "archive", label: "归档库", icon: FolderOpen },
 ];
@@ -784,6 +784,7 @@ export function App() {
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
   const [editingProjectId, setEditingProjectId] = useState(null);
+  const [editingAccountRole, setEditingAccountRole] = useState("blogger");
   const [mediaUploads, setMediaUploads] = useState({});
   const [archiveItems, setArchiveItems] = useState([]);
   const [choiceItem, setChoiceItem] = useState(null);
@@ -849,6 +850,7 @@ export function App() {
       setArchiveItems([]);
       setActiveProject(null);
       setEditingProjectId(null);
+      setEditingAccountRole("blogger");
       setMediaUploads({});
       projectRevisionRef.current = new Map();
       abandonedProjectIdsRef.current = new Set();
@@ -893,6 +895,7 @@ export function App() {
     setArchiveItems(library.archive);
     setActiveProject(nextActiveProject);
     setEditingProjectId(null);
+    setEditingAccountRole("blogger");
     setMediaUploads({});
     projectRevisionRef.current = new Map();
     abandonedProjectIdsRef.current = new Set();
@@ -1297,6 +1300,7 @@ export function App() {
       activeProjectRef.current = project;
       setActiveProject(project);
       setEditingProjectId(null);
+      setEditingAccountRole("blogger");
       setPage("creation");
       return project;
     } catch (error) {
@@ -1397,6 +1401,7 @@ export function App() {
   };
 
   const queueActive = (projectId, navigate = true) => {
+    const wasEditing = editingProjectId === projectId;
     const project = activeProjectRef.current?.id === projectId
       ? activeProjectRef.current
       : projectsRef.current.find((item) => item.id === projectId);
@@ -1410,8 +1415,9 @@ export function App() {
     if (activeProjectRef.current?.id === queuedProject.id) activeProjectRef.current = null;
     setActiveProject((current) => current?.id === queuedProject.id ? null : current);
     setEditingProjectId((current) => current === queuedProject.id ? null : current);
+    if (wasEditing) setEditingAccountRole("blogger");
     if (navigate) setPage("queue");
-    notify("已保存到创作台");
+    notify(wasEditing ? "编辑已同步到创作台" : "已保存到创作台");
     return queuedProject;
   };
 
@@ -1434,6 +1440,7 @@ export function App() {
       activeProjectRef.current = nextProject;
       setActiveProject(nextProject);
       setEditingProjectId(null);
+      setEditingAccountRole("blogger");
       setPage("creation");
       notify("当前创作已保存到创作台，并打开了新画板");
     } catch (error) {
@@ -1656,8 +1663,9 @@ export function App() {
     }, 450));
   };
 
-  const editProject = (project) => {
+  const editProject = (project, accountRole = "blogger") => {
     setEditingProjectId(project.id);
+    setEditingAccountRole(accountRole);
     setPage("creation");
   };
 
@@ -1925,6 +1933,9 @@ export function App() {
     main = (
       <CreationPage
         activeProject={creationProject}
+        accountRole={editingAccountRole}
+        editingExisting={Boolean(editingProject)}
+        onAccountRoleChange={setEditingAccountRole}
         inspirationItems={inspirationItems}
         categories={categories}
         notify={notify}
