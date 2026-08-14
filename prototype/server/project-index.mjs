@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { projectPrimaryCopy } from "../src/pages/queue/content-variants.js";
+import { projectPrimaryCopy } from "../src/services/project-copy.js";
 
 function contentNumber(id) {
   const match = String(id || "").match(/^C(\d+)$/);
