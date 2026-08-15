@@ -372,7 +372,7 @@ test("正文规整后立即完成仍归档最新内容", async ({ page, request 
 
 test("card hierarchy, editable copy, large cover surfaces and button isolation", async ({ page, request }) => {
   await openQueue(page);
-  await expect(page.locator(".brand-copy span")).toHaveText("V1.7");
+  await expect(page.locator(".brand-copy span")).toHaveText("V1.10");
 
   const firstCard = page.locator('[data-project-id="C000127"]');
   await expect(firstCard.locator(".queue-card-number")).toHaveText("01");
@@ -593,6 +593,58 @@ test("灵感卡片底部优先复制原链接，原视频入口收进三点菜�
   await expect(menuSourceLink).toHaveAttribute("href", "https://www.douyin.com/video/reference-301");
 });
 
+test("逐字稿直接进入正文且保留正文复制按钮", async ({ page, request }) => {
+  const transcript = "名利场上的谈话会暴露一个人的家底、认知和价值观。";
+  const response = await request.post("/api/library", {
+    data: {
+      categories: ["认知"],
+      inspirations: [{
+        ...inspirations[0],
+        id: "I000903",
+        title: "逐字稿正文合并测试",
+        body: transcript,
+        transcript,
+        transcriptSource: "tencent_asr",
+        transcriptState: "complete",
+        transcriptStatus: "逐字稿已生成",
+      }],
+      projects: [],
+      archive: [],
+      activeProject: null,
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+
+  await page.goto("/");
+  const card = page.locator('[data-inspiration-id="I000903"]');
+  await expect(card.getByLabel("灵感正文")).toHaveValue(transcript);
+  await expect(card.locator(".card-transcript")).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "复制全文", exact: true })).toBeEnabled();
+});
+
+test("灵感卡片不展示播放数据", async ({ page, request }) => {
+  const response = await request.post("/api/library", {
+    data: {
+      categories: ["认知"],
+      inspirations: [{
+        ...inspirations[0],
+        id: "I000904",
+        title: "播放数据隐藏测试",
+        stats: { views: "12.3万" },
+      }],
+      projects: [],
+      archive: [],
+      activeProject: null,
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+
+  await page.goto("/");
+  const card = page.locator('[data-inspiration-id="I000904"]');
+  await expect(card).toBeVisible();
+  await expect(card.locator(".card-extended-metrics")).toHaveCount(0);
+});
+
 test("视频灵感预览默认开声，用户可手动关闭", async ({ page, request }) => {
   await page.addInitScript(() => {
     const playing = new WeakSet();
@@ -620,6 +672,7 @@ test("视频灵感预览默认开声，用户可手动关闭", async ({ page, re
         id: "I000901",
         contentType: "video",
         title: "默认开声的视频灵感",
+        coverLocalPath: "/assets/covers/creator-desk.png",
         videoUrl: "https://video.example/temporary.mp4",
         videoPreviewUrl: "/library-proxy/media?url=https%3A%2F%2Fvideo.example%2Ftemporary.mp4",
         videoLocalPath: "/assets/covers/coffee-alley.png",
@@ -644,7 +697,7 @@ test("视频灵感预览默认开声，用户可手动关闭", async ({ page, re
     muted: false,
     hasMutedAttribute: false,
     objectFit: "cover",
-    preload: "auto",
+    preload: "none",
     src: "/assets/covers/coffee-alley.png",
   });
   const mediaShape = await videoCard.evaluate((card) => ({
@@ -655,6 +708,7 @@ test("视频灵感预览默认开声，用户可手动关闭", async ({ page, re
   expect(mediaShape).toEqual({ cardWidth: "", mediaAspect: "3 / 4", objectPosition: "50% 50%" });
   const mediaPreview = videoCard.locator(".media-preview");
   const previewVideo = videoCard.locator("video");
+  await expect(videoCard.locator(".media-preview > img")).toHaveAttribute("src", "/assets/covers/creator-desk.png");
   await expect(mediaPreview).not.toHaveClass(/video-ready/);
   await expect(videoCard.locator(".media-preview > img")).toHaveCSS("opacity", "1");
   await previewVideo.dispatchEvent("loadeddata");
@@ -666,6 +720,11 @@ test("视频灵感预览默认开声，用户可手动关闭", async ({ page, re
   await previewVideo.dispatchEvent("playing");
   await expect(mediaPreview).toHaveClass(/video-ready/);
   await expect(videoCard.getByRole("button", { name: "暂停预览", exact: true })).toBeVisible();
+  await mediaPreview.hover();
+  await videoCard.locator("h3").hover();
+  await expect(mediaPreview).not.toHaveClass(/video-ready/);
+  await expect(videoCard.locator(".media-preview > img")).toHaveCSS("opacity", "1");
+  await expect(previewVideo).toHaveCSS("opacity", "0");
   await previewVideo.dispatchEvent("pause");
   await expect(videoCard.getByRole("button", { name: "播放预览", exact: true })).toBeVisible();
   await page.reload();

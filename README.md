@@ -2,7 +2,7 @@
 
 一个面向真实内容生产流程的本地优先 macOS 桌面应用。它把抖音、小红书、B 站、视频号、YouTube 和 Instagram 灵感采集、内容创作、双账号素材管理、创作台整理和完成归档放进同一个 `.library` 资料库。
 
-当前用户版本：**V1.7**（内部构建版本 `1.7.0`）
+当前用户版本：**V1.10**（内部构建版本 `1.10.0`）
 
 [![macOS CI](https://github.com/maxmaximage-hash/video-content-creation-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/maxmaximage-hash/video-content-creation-studio/actions/workflows/ci.yml)
 

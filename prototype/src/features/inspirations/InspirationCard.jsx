@@ -80,6 +80,7 @@ export function InspirationCard({
       .catch(() => notify("已模拟复制全文"));
   };
   const transcriptText = String(item.transcript || "").trim();
+  const transcriptIsBody = Boolean(transcriptText && bodyText.trim() === transcriptText);
   const transcriptCanRun = Boolean(
     onTranscribe
     && (String(item.videoLocalPath || "").startsWith("/library-assets/") || eagleItemId),
@@ -128,7 +129,7 @@ export function InspirationCard({
       cancelled = true;
       clearTimeout(annotationSaveTimerRef.current);
     };
-  }, [eagleItemId, item.id]);
+  }, [eagleItemId, item.id, item.captionSha256, item.transcript]);
 
   const hashCaption = async (value) => {
     const bytes = new TextEncoder().encode(value);
@@ -229,7 +230,23 @@ export function InspirationCard({
       return next;
     });
   };
-  const activeMedia = images.length
+  const activeMedia = isVideoContent
+    ? {
+      ...item,
+      src: "",
+      localPath: "",
+      cover: "",
+      coverLocalPath: item.coverLocalPath || versionedLocalPath,
+      coverUrl: item.coverUrl || activeImageRecord?.sourceUrl || "",
+      videoUrl: item.videoUrl,
+      videoPreviewUrl: item.videoPreviewUrl,
+      videoLocalPath: item.videoLocalPath,
+      eagleItemId: item.eagleItemId,
+      eagleFolderId: item.eagleFolderId,
+      onMediaMissing: markActiveImageMissing,
+      onMediaLoaded: markActiveImageLoaded,
+    }
+    : images.length
     ? {
       ...item,
       src: "",
@@ -253,7 +270,6 @@ export function InspirationCard({
     { key: "shares", label: "转发", Icon: Share2 },
   ].map((metric) => ({ ...metric, value: formatMetric(item.stats?.[metric.key]) })).filter((metric) => metric.value);
   const extendedMetrics = [
-    ["播放", item.stats?.views],
     ["弹幕", item.stats?.danmaku],
     ["投币", item.stats?.coins],
   ].map(([label, value]) => [label, formatMetric(value)]).filter(([, value]) => value);
@@ -380,7 +396,7 @@ export function InspirationCard({
             )}
           </div>
         )}
-        {transcriptText && (
+        {transcriptText && !transcriptIsBody && (
           <details className="card-transcript">
             <summary>
               <span><FileText size={13} />逐字稿</span>

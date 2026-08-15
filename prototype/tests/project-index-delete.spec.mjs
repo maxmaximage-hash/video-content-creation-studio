@@ -395,6 +395,7 @@ test("inspiration hover preview keeps sound enabled by default", async ({ page, 
   await page.goto("/");
   const card = page.locator('[data-inspiration-id="I001107"]');
   const video = card.locator("video");
+  await expect(video).toHaveAttribute("preload", "none");
   await expect(video).toHaveJSProperty("muted", false);
   await expect(video).toHaveJSProperty("volume", 1);
   await card.locator(".media-hover-surface").hover({ force: true });

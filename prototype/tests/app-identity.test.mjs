@@ -22,3 +22,10 @@ test("桌面应用身份与安装路径保持一致", () => {
   assert.deepEqual(LEGACY_APP_INSTALL_NAMES, ["视频内容创作中台.app"]);
   assert.equal(LEGACY_USER_DATA_NAME, "视频内容创作中台");
 });
+
+test("桌面包包含服务端配置直接导入的源码模块", () => {
+  const packagedFiles = new Set(packageJson.build.files);
+  assert.ok(packagedFiles.has("src/services/eagle-asset-routing.js"));
+  assert.ok(packagedFiles.has("src/services/project-copy.js"));
+  assert.ok(packagedFiles.has("src/services/transcript-body.js"));
+});

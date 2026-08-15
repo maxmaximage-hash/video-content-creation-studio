@@ -593,6 +593,8 @@ function MediaPreview({ item, compact = false }) {
     const video = videoRef.current;
     if (!video) return;
     video.pause();
+    setIsPlaying(false);
+    setVideoReady(false);
     try {
       video.currentTime = 0;
       setCurrentTime(0);
@@ -664,7 +666,7 @@ function MediaPreview({ item, compact = false }) {
             muted={isMuted}
             loop
             playsInline
-            preload="auto"
+            preload="none"
             poster={videoReady ? undefined : coverSrc || undefined}
             onLoadedMetadata={updateDuration}
             onLoadedData={updateDuration}
