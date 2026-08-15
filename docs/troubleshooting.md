@@ -5,8 +5,8 @@
 先验证：
 
 ```bash
-codesign --verify --deep --strict '/Applications/视频内容创作中台.app'
-plutil -p '/Applications/视频内容创作中台.app/Contents/Info.plist' \
+codesign --verify --deep --strict '/Applications/Video Hub.app'
+plutil -p '/Applications/Video Hub.app/Contents/Info.plist' \
   | grep com.yinli.video-content-creation-studio
 ```
 

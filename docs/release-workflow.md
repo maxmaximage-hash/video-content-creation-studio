@@ -2,6 +2,14 @@
 
 这套项目按“一个完整版本”同步 GitHub。修复一个小问题后仍然会构建并安装到本机验证，但不会为每个小问题单独发布，也不会让公开 `main` 长期处于半完成状态。
 
+## 用户可见版本规则
+
+- 应用界面只显示 `VX.Y` 两段版本号，例如 `V1.0`、`V1.1`，不显示第三段。
+- 每完成一轮小问题修复，递增后一位；累计 10 轮后进入下一前位并归零，例如 `V1.9` 后为 `V2.0`。
+- 重大调整可以直接进入下一前位。
+- Electron、npm、Git 标签和发布校验仍使用合法的三段 SemVer；用户版本 `V1.1` 对应内部版本 `1.1.0`。
+- Git commit 和“未提交”状态可以作为开发诊断信息显示，但不属于版本号。
+
 ## 分支职责
 
 - `main`：始终表示已经完成本地安装和真实应用验收的稳定版本。
@@ -30,10 +38,10 @@ cd prototype
 npm run version:status
 ```
 
-输出包含版本、分支、完整 commit 和工作区是否干净。应用导航栏右侧也显示：
+输出包含版本、分支、完整 commit 和工作区是否干净。应用导航栏品牌区显示两段用户版本，右侧开发诊断同时显示 commit：
 
 ```text
-v0.2.0-dev.0 · 2db004a502 · 未提交
+V1.1 · 2db004a502 · 未提交
 ```
 
 看到“未提交”说明当前安装包包含尚未进入 Git 历史的本地改动。正式版本不得显示“未提交”。
@@ -50,7 +58,7 @@ npm run build
 npm run desktop:install
 ```
 
-然后在 `/Applications/视频内容创作中台.app` 中完成真实应用验收，并核对界面版本号。只有以下条件都满足才进入发布：
+然后在 `/Applications/Video Hub.app` 中完成真实应用验收，并核对界面版本号。只有以下条件都满足才进入发布：
 
 - 本轮功能在真实安装版中可用。
 - 用户指定的真实平台链接完成实际采集；未涉及采集的版本明确记录“不适用”。
@@ -76,7 +84,7 @@ npm run release:check
 ```bash
 git switch main
 git merge --ff-only codex/vX.Y.Z-workbench
-git tag -a vX.Y.Z -m "视频内容创作中台 vX.Y.Z"
+git tag -a vX.Y.Z -m "Video Hub vX.Y.Z"
 git push origin main
 git push origin vX.Y.Z
 ```

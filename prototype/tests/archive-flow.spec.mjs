@@ -33,8 +33,8 @@ async function seedLibrary(request, { projects = [], archive = [], inspirations 
 
 async function openArchive(page) {
   await page.goto("/");
-  await page.getByRole("button", { name: /^归档/ }).click();
-  await expect(page.getByRole("heading", { name: "归档", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /^归档库/ }).click();
+  await expect(page.getByRole("heading", { name: "归档库", exact: true })).toBeVisible();
 }
 
 test("publish immediately archives ordered videos and preserves canonical relationships", async ({ page, request }) => {
@@ -91,14 +91,14 @@ test("publish immediately archives ordered videos and preserves canonical relati
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: /^待发布/ }).click();
+  await page.getByRole("button", { name: /^创作台/ }).click();
   const queueCard = page.locator('[data-project-id="C000971"]');
-  await queueCard.getByRole("button", { name: "发布", exact: true }).click();
-  await page.getByRole("button", { name: "发布并进入归档", exact: true }).click();
+  await queueCard.getByRole("button", { name: "完成", exact: true }).click();
 
+  await page.getByRole("button", { name: /^归档库/ }).click();
   const record = page.locator('[data-archive-id="C000971"]');
   await expect(record).toBeVisible();
-  await expect(page.getByRole("heading", { name: "归档", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "归档库", exact: true })).toBeVisible();
   await expect(queueCard).toHaveCount(0);
   await expect(record.locator(".archive-video")).toHaveCount(2);
   await expect(record.locator(".archive-video video")).toHaveCount(2);
@@ -149,7 +149,7 @@ test("publish immediately archives ordered videos and preserves canonical relati
       archiveIds: library.archive.map((item) => item.id),
     };
   }).toEqual({ projects: 0, archiveIds: ["C000971"] });
-  expect(library.archive[0].workflow.stage).toBe("published");
+  expect(library.archive[0].workflow.stage).toBe("archived");
   expect(library.archive[0].matched).toBe(false);
   expect(library.archive[0].relationships.referenceContentIds).toEqual(["I000701", "I000702", "I000703"]);
   expect(library.archive[0].references).toEqual(["I000701", "I000702", "I000703"]);
@@ -163,7 +163,7 @@ test("publish immediately archives ordered videos and preserves canonical relati
   expect(manifest.relationships.referenceContentIds).toEqual(["I000701", "I000702", "I000703"]);
 
   await page.reload();
-  await page.getByRole("button", { name: /^归档/ }).click();
+  await page.getByRole("button", { name: /^归档库/ }).click();
   await expect(page.locator('[data-archive-id="C000971"] .archive-video')).toHaveCount(2);
 });
 

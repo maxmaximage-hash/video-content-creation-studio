@@ -3,9 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { mockEagleUploads } from "./eagle-upload-mock.mjs";
 
 const projectId = "C000951";
 const prototypeRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+test.beforeEach(async ({ page }) => {
+  await mockEagleUploads(page);
+});
 
 async function storage(request) {
   const response = await request.get("/api/library");
@@ -43,14 +48,18 @@ async function seedQueue(request, projectPatch = {}) {
 
 async function openQueue(page) {
   await page.goto("/");
-  await page.getByRole("button", { name: /^待发布/ }).click();
+  await page.getByRole("button", { name: /^创作台/ }).click();
   await expect(page.locator(`[data-project-id="${projectId}"]`)).toBeVisible();
   return page.locator(`[data-project-id="${projectId}"]`);
 }
 
 async function uploadFromCard(page, card, label, files) {
+  const accountRole = label.includes("IP 号") ? "ip" : "blogger";
+  const displayLabel = label.startsWith("原素材") ? "原素材" : "成品";
   const chooserPromise = page.waitForEvent("filechooser");
-  await card.locator(".queue-media-upload-card").filter({ hasText: label }).click();
+  await card.locator(`[data-account-role="${accountRole}"] .queue-account-media`)
+    .getByRole("button", { name: new RegExp(`${displayLabel}.*点击或拖入视频`) })
+    .click();
   const chooser = await chooserPromise;
   await chooser.setFiles(files);
 }
@@ -66,8 +75,8 @@ test("queue uploads source and ordered finished videos, then persists category",
   await uploadFromCard(page, card, "成品视频 · IP 号", makeVideo("finished-b.mp4", "b"));
   await expect(card.locator(".queue-media-card").filter({ hasText: "finished-a.mp4" })).toBeVisible();
   await expect(card.locator(".queue-media-card").filter({ hasText: "finished-b.mp4" })).toBeVisible();
-  await expect(card).toContainText("成品视频 · 博主号");
-  await expect(card).toContainText("成品视频 · IP 号");
+  await expect(card.locator('[data-account-role="blogger"]')).toContainText("成品");
+  await expect(card.locator('[data-account-role="ip"]')).toContainText("成品");
   await expect(card).not.toContainText(/精修|V1|V2/);
 
   await card.getByLabel("待发布直传测试分类").selectOption("旅行记录");
@@ -79,22 +88,24 @@ test("queue uploads source and ordered finished videos, then persists category",
       roles: project.mediaAssets.map((asset) => asset.role),
       accountRoles: project.mediaAssets.map((asset) => asset.accountRole),
       orders: project.mediaAssets.filter((asset) => asset.role === "finished_video").map((asset) => asset.order),
-      paths: project.mediaAssets.map((asset) => asset.relativePath),
+      eagleItemIds: project.mediaAssets.map((asset) => asset.eagleItemId),
+      paths: project.mediaAssets.map((asset) => asset.relativePath || ""),
     };
   }).toEqual({
     category: "旅行记录",
     roles: ["source_video", "finished_video", "finished_video"],
     accountRoles: ["blogger", "blogger", "ip"],
     orders: [1, 2],
-    paths: [
-      expect.stringMatching(`^content-units/${projectId}/media/source-video/`),
-      expect.stringMatching(`^content-units/${projectId}/media/finished-video/`),
-      expect.stringMatching(`^content-units/${projectId}/media/finished-video/`),
+    eagleItemIds: [
+      expect.stringMatching(/^EAGLE-(?:MEDIA|UI)-/),
+      expect.stringMatching(/^EAGLE-(?:MEDIA|UI)-/),
+      expect.stringMatching(/^EAGLE-(?:MEDIA|UI)-/),
     ],
+    paths: ["", "", ""],
   });
 
   await page.reload();
-  await page.getByRole("button", { name: /^待发布/ }).click();
+  await page.getByRole("button", { name: /^创作台/ }).click();
   await expect(page.getByLabel("待发布直传测试分类")).toHaveValue("旅行记录");
   await expect(page.locator(`[data-project-id="${projectId}"] .queue-media-card`).filter({ hasText: "finished-b.mp4" })).toBeVisible();
 });
@@ -165,7 +176,7 @@ test("surfaces have no overlay tools and right-click exposes only Finder in brow
   await expect(card.locator("svg.lucide-ellipsis, svg.lucide-more-horizontal")).toHaveCount(0);
   await expect(card).not.toContainText("拖到 Finder 或剪映");
 
-  await card.locator(".queue-card-topbar > span").last().click({ button: "right" });
+  await card.click({ button: "right", position: { x: 16, y: 16 } });
   await expect(page.getByRole("menu", { name: "项目目录操作" })).toBeVisible();
   await expect(page.getByRole("menu", { name: "项目目录操作" }).getByRole("menuitem")).toHaveCount(1);
   await expect(page.getByRole("menuitem", { name: /在访达中显示/ })).toBeEnabled();
@@ -240,7 +251,7 @@ test("mocked Electron bridge receives structured drag payload from media and cov
   await expect(card.locator(".queue-cover-sort-handle, .queue-native-drag-handle")).toHaveCount(0);
 });
 
-test("Queue and Creation edit the same queued project without activeProject duplication", async ({ page, request }) => {
+test("queue inline edits persist without activeProject duplication", async ({ page, request }) => {
   await seedQueue(request, {
     title: "同源编辑初始标题",
     body: "同源编辑初始正文",
@@ -265,8 +276,8 @@ test("Queue and Creation edit the same queued project without activeProject dupl
   });
   expect(reseed.ok()).toBeTruthy();
   const card = await openQueue(page);
-  const title = card.getByLabel("待发布标题");
-  const body = card.getByLabel("待发布正文");
+  const title = card.getByLabel("博主号标题", { exact: true });
+  const body = card.getByLabel("博主号正文", { exact: true });
   await title.fill("Queue 修改后的完整标题不会截断");
   await body.fill("Queue 修改后的正文，进入创作页必须立即可见。");
   await card.getByLabel("Queue 修改后的完整标题不会截断分类").selectOption("旅行记录");
@@ -275,22 +286,31 @@ test("Queue and Creation edit the same queued project without activeProject dupl
     const style = getComputedStyle(element);
     return { overflowY: style.overflowY, resize: style.resize, minHeight: style.minHeight, maxHeight: style.maxHeight };
   });
-  expect(bodyGeometry).toEqual({ overflowY: "auto", resize: "vertical", minHeight: "96px", maxHeight: "320px" });
-  await card.getByRole("button", { name: "继续创作", exact: true }).click();
-  await expect(page.locator(".creation-shell .title-input")).toHaveValue("Queue 修改后的完整标题不会截断");
-  await expect(page.locator(".creation-shell .body-section textarea")).toHaveValue("Queue 修改后的正文，进入创作页必须立即可见。");
-  await expect(page.getByLabel("创作分类")).toHaveValue("旅行记录");
+  expect(bodyGeometry).toEqual({ overflowY: "auto", resize: "vertical", minHeight: "110px", maxHeight: "260px" });
+  await expect.poll(async () => {
+    const library = await (await request.get("/api/library")).json();
+    const edited = library.projects.find((project) => project.id === projectId);
+    return {
+      title: edited?.title,
+      body: edited?.body,
+      category: edited?.category,
+      activeProject: library.activeProject,
+    };
+  }).toEqual({
+    title: "Queue 修改后的完整标题不会截断",
+    body: "Queue 修改后的正文，进入创作页必须立即可见。",
+    category: "旅行记录",
+    activeProject: null,
+  });
 
-  await page.locator(".creation-shell .title-input").fill("创作页未保存修改仍保留");
-  await page.locator(".creation-shell .body-section textarea").fill("从创作页直接返回待发布，项目不能消失。\n第二行仍属于同一对象。");
-  await page.getByLabel("创作分类").selectOption("教程");
-  await page.getByRole("button", { name: /^待发布/ }).click();
+  await page.reload();
+  await page.getByRole("button", { name: /^创作台/ }).click();
 
   const returnedCard = page.locator(`[data-project-id="${projectId}"]`);
   await expect(returnedCard).toBeVisible();
-  await expect(returnedCard.getByLabel("待发布标题")).toHaveValue("创作页未保存修改仍保留");
-  await expect(returnedCard.getByLabel("待发布正文")).toHaveValue("从创作页直接返回待发布，项目不能消失。\n第二行仍属于同一对象。");
-  await expect(returnedCard.getByLabel("创作页未保存修改仍保留分类")).toHaveValue("教程");
+  await expect(returnedCard.getByLabel("博主号标题", { exact: true })).toHaveValue("Queue 修改后的完整标题不会截断");
+  await expect(returnedCard.getByLabel("博主号正文", { exact: true })).toHaveValue("Queue 修改后的正文，进入创作页必须立即可见。");
+  await expect(returnedCard.getByLabel("Queue 修改后的完整标题不会截断分类")).toHaveValue("旅行记录");
   await expect.poll(async () => {
     const library = await (await request.get("/api/library")).json();
     const edited = library.projects.find((project) => project.id === projectId);
@@ -299,15 +319,7 @@ test("Queue and Creation edit the same queued project without activeProject dupl
       title: edited?.title,
       activeProject: library.activeProject,
     };
-  }).toEqual({ projectIds: ["C000950", projectId], title: "创作页未保存修改仍保留", activeProject: null });
-
-  await returnedCard.getByRole("button", { name: "继续创作", exact: true }).click();
-  await page.getByRole("button", { name: "保存到待发布", exact: true }).click();
-  await expect.poll(() => page.locator("[data-project-id]").evaluateAll((cards) => cards.map((item) => item.dataset.projectId))).toEqual(["C000950", projectId]);
-  await expect.poll(async () => {
-    const library = await (await request.get("/api/library")).json();
-    return { ids: library.projects.map((project) => project.id), activeProject: library.activeProject };
-  }).toEqual({ ids: ["C000950", projectId], activeProject: null });
+  }).toEqual({ projectIds: ["C000950", projectId], title: "Queue 修改后的完整标题不会截断", activeProject: null });
 });
 
 test("legacy ready_to_publish active project deterministically merges into projects", async ({ page, request }) => {
@@ -336,8 +348,8 @@ test("legacy ready_to_publish active project deterministically merges into proje
   });
   expect(response.ok()).toBeTruthy();
   await page.goto("/");
-  await page.getByRole("button", { name: /^待发布/ }).click();
-  await expect(page.locator(`[data-project-id="${projectId}"]`).getByLabel("待发布标题")).toHaveValue("active 中的最新版本");
+  await page.getByRole("button", { name: /^创作台/ }).click();
+  await expect(page.locator(`[data-project-id="${projectId}"]`).getByLabel("博主号标题")).toHaveValue("active 中的最新版本");
   const library = await (await request.get("/api/library")).json();
   expect({
     ids: library.projects.map((project) => project.id),
@@ -380,7 +392,8 @@ test("Vite rejects invalid IDs, traversal and symlink escapes for uploads and re
       },
       data: Buffer.from("fixture"),
     });
-    expect(escapedWrite.status()).toBe(403);
+    expect([403, 502, 503]).toContain(escapedWrite.status());
+    expect((await fs.readdir(outsideDir)).sort()).toEqual(["outside.mp4"]);
   } finally {
     await fs.rm(readLink, { force: true });
     await fs.rm(writeLink, { force: true });

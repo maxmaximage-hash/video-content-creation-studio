@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import { fulfillMockEagleMediaUpload, mockEagleUploads } from "./eagle-upload-mock.mjs";
 
 const testRoot = path.dirname(fileURLToPath(import.meta.url));
 const coffeeCover = path.join(testRoot, "../public/assets/covers/coffee-alley.png");
@@ -32,43 +33,28 @@ async function seedCreation(request) {
   expect(response.ok()).toBeTruthy();
 }
 
-test.beforeEach(async ({ request }) => {
+test.beforeEach(async ({ page, request }) => {
+  await mockEagleUploads(page);
   await seedCreation(request);
 });
 
 test("uploaded cover opens full preview and persists through queue and archive", async ({ page, request }) => {
   const browserErrors = [];
-  const recoverableAssetErrors = [];
-  let interruptedAssetRequest = false;
   page.on("console", (message) => {
     if (message.type() !== "error") return;
-    if (message.text().includes("net::ERR_FAILED")) {
-      recoverableAssetErrors.push(message.text());
-      return;
-    }
     browserErrors.push(message.text());
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
-  await page.route("**/library-assets/content-units/**/covers/**", async (route) => {
-    if (!interruptedAssetRequest) {
-      interruptedAssetRequest = true;
-      await route.abort();
-      return;
-    }
-    await route.continue();
-  });
 
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
   const fileChooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "添加封面", exact: true }).click();
   const fileChooser = await fileChooserPromise;
   await fileChooser.setFiles([coffeeCover, mountainCover]);
 
   await expect(page.locator(".cover-option")).toHaveCount(2);
-  await expect(page.locator(".toast")).toContainText("已添加 2 张本地封面");
-  await expect.poll(() => page.locator('.cover-option img[data-asset-retry="1"]').count()).toBe(1);
-  await expect.poll(() => page.locator('.cover-option img[data-asset-retry="1"]').evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
+  await expect(page.locator(".toast")).toContainText("已导入 Eagle 并添加 2 张封面");
 
   expect((await page.locator(".cover-option").allTextContents()).join("")).not.toMatch(/主封面|coffee-alley|mountain-trail/);
   await page.getByRole("button", { name: "放大封面 2", exact: true }).click();
@@ -94,19 +80,15 @@ test("uploaded cover opens full preview and persists through queue and archive",
     remainingName: "mountain-trail.png",
   });
 
-  const retainedSource = activeProject.covers[0].src;
-  const retainedResponse = await request.get(retainedSource);
-  expect(retainedResponse.ok()).toBeTruthy();
-  expect(retainedResponse.headers()["content-type"]).toBe("image/png");
+  const retainedSource = `/api/eagle-media/${activeProject.covers[0].eagleItemId}`;
+  expect(retainedSource).toMatch(/^\/api\/eagle-media\//);
+  expect(activeProject.covers[0].eagleItemId).toBeTruthy();
+  expect(activeProject.covers[0].relativePath).toBeUndefined();
 
-  await page.getByRole("button", { name: "保存到待发布", exact: true }).click();
+  await page.getByRole("button", { name: "保存到创作台", exact: true }).click();
   await expect(page.getByTestId("collapsed-covers-C000901")).toContainText("1 张");
-  await page.getByRole("button", { name: "发布", exact: true }).click();
-
-  const publishDialog = page.getByRole("dialog", { name: "确认发布" });
-  await expect(publishDialog.getByText("1 张封面", { exact: true })).toBeVisible();
-  await expect(publishDialog.locator(".snapshot-preview img")).toHaveAttribute("src", retainedSource);
-  await publishDialog.getByRole("button", { name: "发布并进入归档", exact: true }).click();
+  await page.getByRole("button", { name: "完成", exact: true }).click();
+  await page.getByRole("button", { name: /^归档库/ }).click();
 
   await expect(page.locator(".archive-record .archive-fallback img")).toHaveAttribute("src", retainedSource);
   let archivedLibrary;
@@ -114,16 +96,16 @@ test("uploaded cover opens full preview and persists through queue and archive",
     archivedLibrary = await (await request.get("/api/library")).json();
     return archivedLibrary.archive.length;
   }).toBe(1);
-  expect(archivedLibrary.archive[0].coverLocalPath).toBe(retainedSource);
+  expect(archivedLibrary.archive[0].coverLocalPath).toBeUndefined();
   expect(archivedLibrary.archive[0].covers).toHaveLength(1);
+  expect(archivedLibrary.archive[0].covers[0].eagleItemId).toBe(activeProject.covers[0].eagleItemId);
   expect(archivedLibrary.activeProject).toBeNull();
-  expect(recoverableAssetErrors).toHaveLength(1);
   expect(browserErrors).toEqual([]);
 });
 
 test("frameless cover target accepts external image drops", async ({ page, request }) => {
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 
   const uploadButton = page.getByRole("button", { name: "添加封面", exact: true });
   await expect(uploadButton).toBeVisible();
@@ -150,7 +132,7 @@ test("frameless cover target accepts external image drops", async ({ page, reque
 
   await expect(dropZone).not.toHaveClass(/is-file-dragging/);
   await expect(page.locator(".cover-option")).toHaveCount(1);
-  await expect(page.locator(".toast")).toContainText("已添加 1 张本地封面");
+  await expect(page.locator(".toast")).toContainText("已导入 Eagle 并添加 1 张封面");
   await expect.poll(async () => {
     const library = await (await request.get("/api/library")).json();
     return library.activeProject?.covers?.[0]?.name;
@@ -159,7 +141,7 @@ test("frameless cover target accepts external image drops", async ({ page, reque
 
 test("source and dynamic finished videos persist as one content unit and appear in the publish handoff", async ({ page, request }) => {
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 
   const sourceChooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "上传原素材 · 博主号", exact: true }).click();
@@ -185,6 +167,7 @@ test("source and dynamic finished videos persist as one content unit and appear 
   }).toBe(1);
   await expect(page.locator(".project-media-slot.has-media").getByText("成品视频 · 博主号", { exact: true })).toHaveCount(1);
 
+  await page.getByLabel("编辑账号").getByRole("button", { name: "IP 号", exact: true }).click();
   const secondFinishedChooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "上传成品视频 · IP 号", exact: true }).click();
   const secondFinishedChooser = await secondFinishedChooserPromise;
@@ -193,7 +176,7 @@ test("source and dynamic finished videos persist as one content unit and appear 
     mimeType: "video/mp4",
     buffer: Buffer.from("00000020ftypisomFINISHED-B"),
   });
-  await expect(page.locator(".project-media-slot.has-media").getByText(/成品视频 ·/)).toHaveCount(2);
+  await expect(page.locator(".project-media-slot.has-media").getByText("成品视频 · IP 号", { exact: true })).toHaveCount(1);
 
   let library;
   await expect.poll(async () => {
@@ -210,20 +193,21 @@ test("source and dynamic finished videos persist as one content unit and appear 
   ]);
   expect(fs.readFileSync(path.join(contentRoot, "copy/title.txt"), "utf8")).toContain("可上传封面的完整创作");
   for (const asset of manifest.mediaAssets) {
-    expect(asset.relativePath.startsWith("content-units/C000901/")).toBeTruthy();
-    expect(fs.existsSync(path.join(library.storage.libraryDir, asset.relativePath))).toBeTruthy();
+    expect(asset.eagleItemId).toBeTruthy();
+    expect(asset.eagleFolderId).toBeTruthy();
+    expect(asset.relativePath || "").toBe("");
   }
   await page.screenshot({ path: path.join(testRoot, "../qa/creation-media-handoff.png"), fullPage: true });
 
-  await page.getByRole("button", { name: "保存到待发布", exact: true }).click();
+  await page.getByRole("button", { name: "保存到创作台", exact: true }).click();
   const card = page.locator('[data-project-id="C000901"]');
-  await expect(card.getByText("原素材 · 博主号", { exact: true })).toBeVisible();
-  await expect(card.getByText("成品视频 · 博主号", { exact: true })).toBeVisible();
-  await expect(card.getByText("成品视频 · IP 号", { exact: true })).toBeVisible();
+  await expect(card.locator('[data-account-role="blogger"]').getByText("原素材", { exact: true })).toBeVisible();
+  await expect(card.locator('[data-account-role="blogger"]').getByText("成品", { exact: true })).toBeVisible();
+  await expect(card.locator('[data-account-role="ip"]').getByText("成品", { exact: true })).toBeVisible();
   await expect(card).not.toContainText(/精修|V1|V2/);
   await expect(card.getByRole("button", { name: "在访达中显示", exact: true })).toHaveCount(0);
   await expect(card.locator(".queue-native-drag-handle")).toHaveCount(0);
-  await card.locator(".queue-card-topbar > span").last().click({ button: "right" });
+  await card.click({ button: "right", position: { x: 180, y: 24 } });
   await expect(page.getByRole("menu", { name: "项目目录操作" }).getByRole("menuitem")).toHaveCount(1);
   await expect(page.getByRole("menuitem", { name: /在访达中显示/ })).toBeEnabled();
   await page.keyboard.press("Escape");
@@ -243,11 +227,11 @@ test("an in-progress video upload survives navigation away from creation", async
   await page.route("**/api/project-media**", async (route) => {
     markUploadStarted();
     await uploadGate;
-    await route.continue();
+    await fulfillMockEagleMediaUpload(route);
   });
 
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "上传成品视频 · 博主号", exact: true }).click();
@@ -262,9 +246,9 @@ test("an in-progress video upload survives navigation away from creation", async
   await expect(page.locator(".project-media-progress")).toBeVisible();
   await expect(page.locator(".project-media-progress")).toContainText("上传中");
 
-  await page.getByLabel("主导航").getByRole("button", { name: "待发布", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "待发布", exact: true })).toBeVisible();
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "创作台", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "创作台", exact: true })).toBeVisible();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 
   await expect(page.locator(".project-media-progress")).toBeVisible();
   await expect(page.locator(".project-media-slot.has-media")).toHaveCount(0);

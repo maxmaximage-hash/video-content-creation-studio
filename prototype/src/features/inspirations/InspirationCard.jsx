@@ -20,6 +20,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { coverSource } from "../../pages/creation/project-model.js";
+import { eagleItemIdFrom, fetchEagleAnnotation, saveEagleAnnotation } from "../../services/eagle-media.js";
 import {
   formatDuration,
   formatMetric,
@@ -41,12 +42,14 @@ export function InspirationCard({
   showHistoricalTranscriptionAction = false,
   onOpenAuth,
   notify,
+  sessionId = "",
   referenceMode = false,
   onDetach,
   isLinked = false,
   categoryValue,
   renderMediaPreview,
 }) {
+  const eagleItemId = eagleItemIdFrom(item);
   const images = useMemo(() => {
     const indexed = Array.isArray(item.images) ? item.images : [];
     const canonical = Array.isArray(item.mediaAssets)
@@ -56,12 +59,15 @@ export function InspirationCard({
       : [];
     return (indexed.length ? indexed : canonical).filter((image) => coverSource(image));
   }, [item.images, item.mediaAssets]);
-  const isVideoContent = item.contentType === "video" && Boolean(item.videoLocalPath || item.videoPreviewUrl || item.videoUrl);
+  const isVideoContent = item.contentType === "video" && Boolean(item.videoLocalPath || item.videoPreviewUrl || item.videoUrl || eagleItemId);
   const [activeImage, setActiveImage] = useState(0);
+  const [annotationText, setAnnotationText] = useState("");
+  const [annotationState, setAnnotationState] = useState(eagleItemId ? "loading" : "local");
+  const annotationSaveTimerRef = useRef(null);
   const [missingImageIds, setMissingImageIds] = useState(() => new Set());
   const [retryClock, setRetryClock] = useState(() => Date.now());
   const decodedImageCacheRef = useRef(new Map());
-  const bodyText = visibleBodyText(item);
+  const bodyText = eagleItemId ? annotationText : visibleBodyText(item);
   const linkedInLibrary = isLinked && !referenceMode;
   const copyOriginalLink = () => {
     navigator.clipboard.writeText(item.originalUrl || "")
@@ -74,7 +80,10 @@ export function InspirationCard({
       .catch(() => notify("已模拟复制全文"));
   };
   const transcriptText = String(item.transcript || "").trim();
-  const transcriptCanRun = Boolean(onTranscribe && String(item.videoLocalPath || "").startsWith("/library-assets/"));
+  const transcriptCanRun = Boolean(
+    onTranscribe
+    && (String(item.videoLocalPath || "").startsWith("/library-assets/") || eagleItemId),
+  );
   const isHistoricalTranscriptionCandidate = !item.transcriptState && transcriptCanRun;
   const showTranscriptPending = !transcriptText && (
     Boolean(item.transcriptState)
@@ -94,6 +103,66 @@ export function InspirationCard({
   useEffect(() => {
     if (activeImage >= images.length) setActiveImage(0);
   }, [activeImage, images.length]);
+
+  useEffect(() => {
+    clearTimeout(annotationSaveTimerRef.current);
+    if (!eagleItemId) {
+      setAnnotationText(visibleBodyText(item));
+      setAnnotationState("local");
+      return undefined;
+    }
+    let cancelled = false;
+    setAnnotationState("loading");
+    fetchEagleAnnotation(eagleItemId)
+      .then((text) => {
+        if (cancelled) return;
+        setAnnotationText(text);
+        setAnnotationState("ready");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAnnotationText("");
+        setAnnotationState("unavailable");
+      });
+    return () => {
+      cancelled = true;
+      clearTimeout(annotationSaveTimerRef.current);
+    };
+  }, [eagleItemId, item.id]);
+
+  const hashCaption = async (value) => {
+    const bytes = new TextEncoder().encode(value);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  };
+
+  const updateBodyText = (value) => {
+    if (!eagleItemId) {
+      onBodyChange?.(item.id, value);
+      return;
+    }
+    setAnnotationText(value);
+    setAnnotationState("saving");
+    clearTimeout(annotationSaveTimerRef.current);
+    annotationSaveTimerRef.current = setTimeout(async () => {
+      try {
+        const annotation = await saveEagleAnnotation({ itemId: eagleItemId, annotation: value, sessionId });
+        const sha256 = await hashCaption(annotation);
+        setAnnotationText(annotation);
+        setAnnotationState("ready");
+        onBodyChange?.(item.id, {
+          body: "",
+          captionStorage: "eagle_annotation",
+          captionEagleItemId: eagleItemId,
+          captionLength: annotation.length,
+          captionSha256: sha256,
+        });
+      } catch (error) {
+        setAnnotationState("unavailable");
+        notify?.(error.message || "文案暂不可保存");
+      }
+    }, 450);
+  };
 
   const activeImageRecord = images[activeImage] || null;
   const activeImageId = activeImageRecord?.id || `${item.id}-image-${activeImage + 1}`;
@@ -171,6 +240,8 @@ export function InspirationCard({
       videoUrl: activeImage === 0 ? item.videoUrl : "",
       videoPreviewUrl: activeImage === 0 ? item.videoPreviewUrl : "",
       videoLocalPath: activeImage === 0 ? item.videoLocalPath : "",
+      eagleItemId: activeImage === 0 ? item.eagleItemId : "",
+      eagleFolderId: activeImage === 0 ? item.eagleFolderId : "",
       onMediaMissing: markActiveImageMissing,
       onMediaLoaded: markActiveImageLoaded,
     }
@@ -330,11 +401,15 @@ export function InspirationCard({
           </div>
         )}
         <div className="card-body-editor">
+          {annotationState === "unavailable" && <div className="card-body-state">文案暂不可读取</div>}
           <textarea
             aria-label="灵感正文"
             value={bodyText}
-            onChange={(event) => onBodyChange?.(item.id, event.target.value)}
+            placeholder={annotationState === "loading" ? "正在读取 Eagle 注释" : ""}
+            disabled={annotationState === "loading" || annotationState === "unavailable"}
+            onChange={(event) => updateBodyText(event.target.value)}
           />
+          {annotationState === "saving" && <span className="card-body-saving">保存到 Eagle</span>}
           <button type="button" className="card-copy-body-button" disabled={!bodyText} onClick={copyFullBody}>
             <Copy size={13} />复制全文
           </button>

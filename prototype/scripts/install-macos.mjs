@@ -5,9 +5,15 @@ import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  APP_BUNDLE_ID,
+  APP_INSTALL_NAME,
+  LEGACY_APP_INSTALL_NAMES,
+  LEGACY_USER_DATA_NAME,
+} from "../desktop/app-identity.mjs";
 
-const APP_NAME = "视频内容创作中台.app";
-const APP_ID = "com.yinli.video-content-creation-studio";
+const APP_NAME = APP_INSTALL_NAME;
+const APP_ID = APP_BUNDLE_ID;
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 function argument(name) {
@@ -59,8 +65,13 @@ async function findBuiltApp() {
   const candidates = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const candidate = path.join(releaseRoot, entry.name, APP_NAME);
-    if (await bundleId(candidate) === APP_ID) candidates.push(candidate);
+    const outputDir = path.join(releaseRoot, entry.name);
+    const apps = await fs.readdir(outputDir, { withFileTypes: true }).catch(() => []);
+    for (const app of apps) {
+      if (!app.isDirectory() || !app.name.endsWith(".app")) continue;
+      const candidate = path.join(outputDir, app.name);
+      if (await bundleId(candidate) === APP_ID) candidates.push(candidate);
+    }
   }
   candidates.sort((left, right) => right.localeCompare(left));
   if (!candidates.length) throw new Error("没有找到可安装的桌面应用产物");
@@ -70,9 +81,12 @@ async function findBuiltApp() {
 async function removeStaleBuildApps() {
   const legacyDirectories = ["mac", "mac-arm64", "mac-x64", "mac-universal"];
   for (const directory of legacyDirectories) {
-    const candidate = path.join(root, "dist", directory, APP_NAME);
-    if (await bundleId(candidate) === APP_ID) {
-      await fs.rm(path.dirname(candidate), { recursive: true, force: true });
+    for (const appName of [APP_NAME, ...LEGACY_APP_INSTALL_NAMES]) {
+      const candidate = path.join(root, "dist", directory, appName);
+      if (await bundleId(candidate) === APP_ID) {
+        await fs.rm(path.dirname(candidate), { recursive: true, force: true });
+        break;
+      }
     }
   }
 }
@@ -87,14 +101,22 @@ await run(process.execPath, [path.join(root, "scripts/package-desktop.mjs"), "--
 const sourceApp = await findBuiltApp();
 const targetRoot = path.resolve(argument("--target") || "/Applications");
 const targetApp = path.join(targetRoot, APP_NAME);
+const legacyApps = LEGACY_APP_INSTALL_NAMES.map((appName) => path.join(targetRoot, appName));
 const temporaryApp = path.join(targetRoot, `.video-content-studio-installing-${process.pid}.app`);
 const previousApp = path.join(targetRoot, `.video-content-studio-previous-${process.pid}.app`);
 
 await fs.mkdir(targetRoot, { recursive: true });
-if (await fs.stat(targetApp).catch(() => null)) {
-  if (await bundleId(targetApp) !== APP_ID) {
-    throw new Error(`拒绝覆盖 Bundle ID 不匹配的应用：${targetApp}`);
+const installedCandidates = [targetApp, ...legacyApps];
+let hasExistingInstall = false;
+for (const candidate of installedCandidates) {
+  if (!await fs.stat(candidate).catch(() => null)) continue;
+  const candidateId = await bundleId(candidate);
+  if (candidate === targetApp && candidateId !== APP_ID) {
+    throw new Error(`拒绝覆盖 Bundle ID 不匹配的应用：${candidate}`);
   }
+  if (candidateId === APP_ID) hasExistingInstall = true;
+}
+if (hasExistingInstall) {
   await run("osascript", ["-e", `tell application id \"${APP_ID}\" to quit`], { quiet: true }).catch(() => {});
 }
 
@@ -112,6 +134,11 @@ try {
   await run("codesign", ["--verify", "--deep", "--strict", targetApp]);
   if (await bundleId(targetApp) !== APP_ID) throw new Error("安装后 Bundle ID 校验失败");
   if (movedPrevious) await fs.rm(previousApp, { recursive: true, force: true });
+  for (const legacyApp of legacyApps) {
+    if (await bundleId(legacyApp) === APP_ID) {
+      await fs.rm(legacyApp, { recursive: true, force: true });
+    }
+  }
 } catch (error) {
   await fs.rm(temporaryApp, { recursive: true, force: true }).catch(() => {});
   if (movedPrevious && !await fs.stat(targetApp).catch(() => null)) {
@@ -124,5 +151,5 @@ await fs.rm(path.dirname(sourceApp), { recursive: true, force: true });
 await removeStaleBuildApps();
 
 console.log(`INSTALLED_APP=${targetApp}`);
-console.log(`AUTH_PROFILE_ROOT=${path.join(os.homedir(), "Library", "Application Support", "视频内容创作中台", "auth-browser")}`);
+console.log(`AUTH_PROFILE_ROOT=${path.join(os.homedir(), "Library", "Application Support", LEGACY_USER_DATA_NAME, "auth-browser")}`);
 if (process.argv.includes("--open")) await run("open", [targetApp]);

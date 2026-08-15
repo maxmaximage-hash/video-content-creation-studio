@@ -5,6 +5,13 @@ import { randomUUID } from "node:crypto";
 
 const DEFAULT_TTL_MS = 45_000;
 const DEFAULT_HEARTBEAT_MS = 12_000;
+const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
+const MIN_TTL_MS = 250;
+const MIN_HEARTBEAT_MS = 100;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function lockError(message, details = {}) {
   const error = new Error(message);
@@ -47,8 +54,9 @@ async function replaceOwnedLock(lockPath, value) {
 
 export function createLibraryWriteLease(options = {}) {
   const ownerId = options.ownerId || randomUUID();
-  const ttlMs = Math.max(15_000, Number(options.ttlMs) || DEFAULT_TTL_MS);
-  const heartbeatMs = Math.min(ttlMs / 2, Math.max(5_000, Number(options.heartbeatMs) || DEFAULT_HEARTBEAT_MS));
+  const ttlMs = Math.max(MIN_TTL_MS, Number(options.ttlMs) || DEFAULT_TTL_MS);
+  const heartbeatMs = Math.min(ttlMs / 2, Math.max(MIN_HEARTBEAT_MS, Number(options.heartbeatMs) || DEFAULT_HEARTBEAT_MS));
+  const waitTimeoutMs = Math.max(0, Number(options.waitTimeoutMs) || DEFAULT_WAIT_TIMEOUT_MS);
   let libraryDir = "";
   let lockPath = "";
   let owned = false;
@@ -59,10 +67,11 @@ export function createLibraryWriteLease(options = {}) {
   function publicState() {
     return {
       owned,
-      mode: owned ? "read_write" : "read_only",
+      mode: "read_write",
       owner: lastOwner ? {
         host: lastOwner.host || "",
         pid: Number(lastOwner.pid) || 0,
+        acquiredAt: lastOwner.acquiredAt || "",
         expiresAt: lastOwner.expiresAt || "",
       } : null,
     };
@@ -82,12 +91,16 @@ export function createLibraryWriteLease(options = {}) {
   }
 
   async function configure(nextLibraryDir) {
+    const resolvedLibraryDir = path.resolve(nextLibraryDir);
+    if (libraryDir === resolvedLibraryDir && lockPath) return publicState();
     await release();
-    libraryDir = path.resolve(nextLibraryDir);
+    libraryDir = resolvedLibraryDir;
     const metadataDir = path.join(libraryDir, "metadata");
     await fs.mkdir(metadataDir, { recursive: true });
     lockPath = path.join(metadataDir, "library-writer.lock.json");
-    return acquire({ allowReadOnly: true });
+    lastOwner = await readLock(lockPath);
+    owned = false;
+    return publicState();
   }
 
   async function removeExpired(existing) {
@@ -115,7 +128,8 @@ export function createLibraryWriteLease(options = {}) {
   async function acquire({ allowReadOnly = false } = {}) {
     if (!lockPath) throw new Error("资料库写入锁尚未配置");
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    const deadline = Date.now() + waitTimeoutMs;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
       const existing = await readLock(lockPath);
       if (existing?.ownerId === ownerId) {
         const next = leaseRecord();
@@ -129,7 +143,11 @@ export function createLibraryWriteLease(options = {}) {
         owned = false;
         lastOwner = existing;
         if (allowReadOnly) return publicState();
-        throw lockError("资料库正在另一台电脑上编辑，当前已进入只读保护", { lockOwner: publicState().owner });
+        if (Date.now() < deadline) {
+          await sleep(Math.min(100, Math.max(20, ttlMs / 10)));
+          continue;
+        }
+        throw lockError("资料库正在另一台电脑上写入，请稍后自动重试", { lockOwner: publicState().owner });
       }
       try {
         const next = leaseRecord();

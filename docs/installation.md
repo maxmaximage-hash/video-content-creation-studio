@@ -44,7 +44,7 @@ npm run desktop:install
 默认目标为：
 
 ```text
-/Applications/视频内容创作中台.app
+/Applications/Video Hub.app
 ```
 
 没有 `/Applications` 写权限时，可以安装到用户应用目录：
@@ -56,8 +56,8 @@ node scripts/install-macos.mjs --target "$HOME/Applications" --open
 ### 4. 验证
 
 ```bash
-codesign --verify --deep --strict '/Applications/视频内容创作中台.app'
-plutil -p '/Applications/视频内容创作中台.app/Contents/Info.plist' \
+codesign --verify --deep --strict '/Applications/Video Hub.app'
+plutil -p '/Applications/Video Hub.app/Contents/Info.plist' \
   | grep com.yinli.video-content-creation-studio
 ```
 
@@ -94,13 +94,15 @@ npm run desktop:install
 - `~/Library/Application Support/视频内容创作中台/library-session.json`。
 - `~/Library/Application Support/视频内容创作中台/auth-browser/`。
 
+从旧中文应用名升级时，脚本会在新应用验证成功后移除同 Bundle ID 的 `/Applications/视频内容创作中台.app`，统一保留 `/Applications/Video Hub.app`；上面的兼容数据目录不会迁移或删除。
+
 ## 卸载
 
 只卸载应用：
 
 ```bash
 osascript -e 'tell application id "com.yinli.video-content-creation-studio" to quit' || true
-rm -rf '/Applications/视频内容创作中台.app'
+rm -rf '/Applications/Video Hub.app'
 ```
 
 上面的命令不会删除 Library 和登录 profile。删除用户数据属于不可恢复操作，应由用户明确指定准确路径后单独执行，不要把 `.library` 和应用一起删除。

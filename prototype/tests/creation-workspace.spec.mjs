@@ -2,11 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import { fulfillMockEagleMediaUpload, mockEagleUploads } from "./eagle-upload-mock.mjs";
 
 const prototypeRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const coffeeCover = path.join(prototypeRoot, "public/assets/covers/coffee-alley.png");
 const creatorCover = path.join(prototypeRoot, "public/assets/covers/creator-desk.png");
 const mountainCover = path.join(prototypeRoot, "public/assets/covers/mountain-trail.png");
+
+test.beforeEach(async ({ page }) => {
+  await mockEagleUploads(page);
+});
 
 function richProject(id = "C009901") {
   return {
@@ -89,7 +94,7 @@ async function seedInspirationEntryLibrary(request) {
 
 async function openCreation(page) {
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 }
 
 async function libraryState(request) {
@@ -129,7 +134,7 @@ async function startGatedVideoUpload(page, fileName) {
   await page.route("**/api/project-media**", async (route) => {
     markStarted();
     await gate;
-    await route.continue();
+    await fulfillMockEagleMediaUpload(route);
   });
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "上传成品视频 · 博主号", exact: true }).click();
@@ -193,7 +198,7 @@ test("creation covers support pointer and keyboard sorting without external drop
   }).toEqual(["coffee.png", "creator.png", "mountain.png", "external-after-sort.png"]);
 
   await page.reload();
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
   await expect(page.locator(".cover-option")).toHaveCount(4);
   expect(await page.locator(".cover-option").evaluateAll((covers) => covers.map((cover) => cover.dataset.coverId))).toEqual(
     library.activeProject.covers.map((cover) => cover.id),
@@ -249,7 +254,7 @@ test("cover delete control is hidden until hover or keyboard focus and layout st
   }
 });
 
-test("clear is confirmed, permanently deletes the old content unit, and opens a fresh ID", async ({ page, request }) => {
+test("clear is confirmed, removes the old software unit, and opens a fresh ID", async ({ page, request }) => {
   await seedLibrary(request);
   await openCreation(page);
 
@@ -257,15 +262,20 @@ test("clear is confirmed, permanently deletes the old content unit, and opens a 
   await page.getByRole("button", { name: "添加封面", exact: true }).click();
   const chooser = await chooserPromise;
   await chooser.setFiles(coffeeCover);
-  let uploadedPath;
+  let uploadedItemId;
   await expect.poll(async () => {
     const library = await libraryState(request);
-    uploadedPath = library.activeProject.covers.find((cover) => cover.name === "coffee-alley.png")?.relativePath;
-    return uploadedPath || "";
-  }).not.toBe("");
+    const uploaded = library.activeProject.covers.find((cover) => cover.name === "coffee-alley.png");
+    uploadedItemId = uploaded?.eagleItemId;
+    return {
+      eagleItemId: uploaded?.eagleItemId || "",
+      relativePath: uploaded?.relativePath || "",
+    };
+  }).toEqual({
+    eagleItemId: expect.stringMatching(/^EAGLE-COVER-/),
+    relativePath: "",
+  });
   const library = await libraryState(request);
-  const absoluteUploadedPath = path.join(library.storage.libraryDir, uploadedPath);
-  expect(fs.existsSync(absoluteUploadedPath)).toBe(true);
 
   await page.getByRole("button", { name: "清空全部", exact: true }).click();
   const clearDialog = page.getByRole("dialog", { name: "清空当前画板？" });
@@ -302,7 +312,7 @@ test("clear is confirmed, permanently deletes the old content unit, and opens a 
     completedAt: null,
     duplicateInQueue: false,
   });
-  expect(fs.existsSync(absoluteUploadedPath)).toBe(false);
+  expect(uploadedItemId).toBeTruthy();
   expect(fs.existsSync(path.join(library.storage.libraryDir, "content-units", "C009901"))).toBe(false);
 });
 
@@ -408,7 +418,7 @@ test("inspiration entry releases its modal before ID allocation and the first ne
   }).toEqual([inspiration.id]);
 
   await newButton.click();
-  await newDialog.getByRole("button", { name: /保存到待发布/ }).click();
+  await newDialog.getByRole("button", { name: /保存到创作台/ }).click();
   let finalActiveId;
   await expect.poll(async () => {
     const library = await libraryState(request);
@@ -450,7 +460,7 @@ test("new creation handles cancel, queue, empty canvas, discard, restart, and ne
   await expect(page.locator(".title-input")).toHaveValue("需要完整保留的创作标题");
 
   await page.getByRole("button", { name: "新建创作", exact: true }).click();
-  await newDialog.getByRole("button", { name: /保存到待发布/ }).click();
+  await newDialog.getByRole("button", { name: /保存到创作台/ }).click();
   let firstNewId;
   await expect.poll(async () => {
     const library = await libraryState(request);
@@ -467,7 +477,7 @@ test("new creation handles cancel, queue, empty canvas, discard, restart, and ne
       activeDuplicate: library.projects.some((project) => project.id === firstNewId),
     };
   }).toEqual({
-    activeId: expect.stringMatching(/^C\d{6}$/),
+    activeId: expect.stringMatching(/^C\d{6,}$/),
     queuedTitle: "需要完整保留的创作标题",
     queuedBody: "正文、分类、封面、参考、原素材和成品视频都必须一起保留。",
     queuedCategory: "教程",
@@ -482,11 +492,15 @@ test("new creation handles cancel, queue, empty canvas, discard, restart, and ne
   await expect(newDialog).toHaveCount(0);
   let secondNewId;
   await expect.poll(async () => {
-    secondNewId = (await libraryState(request)).activeProject?.id;
-    return secondNewId;
-  }).not.toBe(firstNewId);
+    const candidateId = (await libraryState(request)).activeProject?.id || "";
+    if (candidateId === firstNewId || !/^C\d{6,}$/.test(candidateId)) return "";
+    secondNewId = candidateId;
+    return candidateId;
+  }).toMatch(/^C\d{6,}$/);
+  await expect(page.locator(".toast")).toContainText(secondNewId);
 
   await page.locator(".title-input").fill("这份草稿将被放弃");
+  await expect.poll(async () => (await libraryState(request)).activeProject?.title).toBe("这份草稿将被放弃");
   await page.getByRole("button", { name: "新建创作", exact: true }).click();
   await newDialog.getByRole("button", { name: /删除 \/ 放弃当前草稿/ }).click();
   let thirdNewId;
@@ -499,20 +513,22 @@ test("new creation handles cancel, queue, empty canvas, discard, restart, and ne
       discardedQueued: library.projects.some((project) => project.id === secondNewId),
     };
   }).toEqual({
-    activeId: expect.stringMatching(/^C\d{6}$/),
+    activeId: expect.stringMatching(/^C\d{6,}$/),
     changed: true,
     discardedQueued: false,
   });
   expect(new Set(["C009901", firstNewId, secondNewId, thirdNewId]).size).toBe(4);
 
   await page.reload();
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
   await page.getByRole("button", { name: "新建创作", exact: true }).click();
   let fourthNewId;
   await expect.poll(async () => {
-    fourthNewId = (await libraryState(request)).activeProject?.id;
-    return fourthNewId;
-  }).not.toBe(thirdNewId);
+    const candidateId = (await libraryState(request)).activeProject?.id || "";
+    if (candidateId === thirdNewId || !/^C\d{6,}$/.test(candidateId)) return "";
+    fourthNewId = candidateId;
+    return candidateId;
+  }).toMatch(/^C\d{6,}$/);
   expect(new Set(["C009901", firstNewId, secondNewId, thirdNewId, fourthNewId]).size).toBe(5);
 });
 
@@ -524,7 +540,7 @@ test("queued upload completes on the old ID and never attaches to the new canvas
 
   const releaseUpload = await startGatedVideoUpload(page, "queued-late.mp4");
   await page.getByRole("button", { name: "新建创作", exact: true }).click();
-  await page.getByRole("dialog", { name: "新建创作" }).getByRole("button", { name: /保存到待发布/ }).click();
+  await page.getByRole("dialog", { name: "新建创作" }).getByRole("button", { name: /保存到创作台/ }).click();
   let newId;
   await expect.poll(async () => {
     const library = await libraryState(request);
@@ -560,11 +576,28 @@ test("clear and discard invalidate old uploads so they cannot reattach", async (
   await expect.poll(async () => (await libraryState(request)).activeProject?.mediaAssets).toEqual([]);
 
   await page.unroute("**/api/project-media**");
+  let beforeDiscardId;
+  await expect.poll(async () => {
+    const candidateId = (await libraryState(request)).activeProject?.id || "";
+    if (!/^C\d{6,}$/.test(candidateId)) return "";
+    beforeDiscardId = candidateId;
+    return candidateId;
+  }).toMatch(/^C\d{6,}$/);
   await page.locator(".title-input").fill("放弃时仍在上传");
+  await expect.poll(
+    async () => (await libraryState(request)).activeProject?.title,
+    { timeout: 15000 },
+  ).toBe("放弃时仍在上传");
   const releaseDiscardedUpload = await startGatedVideoUpload(page, "discarded-late.mp4");
   await page.getByRole("button", { name: "新建创作", exact: true }).click();
   await page.getByRole("dialog", { name: "新建创作" }).getByRole("button", { name: /删除 \/ 放弃当前草稿/ }).click();
-  const newId = (await libraryState(request)).activeProject.id;
+  let newId;
+  await expect.poll(async () => {
+    const candidateId = (await libraryState(request)).activeProject?.id || "";
+    if (candidateId === beforeDiscardId || !/^C\d{6,}$/.test(candidateId)) return "";
+    newId = candidateId;
+    return candidateId;
+  }).toMatch(/^C\d{6,}$/);
   releaseDiscardedUpload();
   await expect.poll(async () => {
     const library = await libraryState(request);

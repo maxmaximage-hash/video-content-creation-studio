@@ -41,6 +41,27 @@
   border-color: rgba(214, 179, 106, .24);
 }
 
+.archive-record-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
+.archive-record-actions button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid rgba(214,179,106,.32);
+  border-radius: 6px;
+  color: #efd89f;
+  background: rgba(214,179,106,.08);
+  font-size: 11px;
+}
+
+.archive-record-actions .archive-delete-button { color: #e9aaa1; border-color: rgba(211,104,91,.34); background: rgba(211,104,91,.08); }
+
 .archive-record-meta {
   min-height: 44px;
   display: flex;

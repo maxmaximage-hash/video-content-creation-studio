@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { constants as fsConstants, createReadStream, createWriteStream } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -37,12 +38,21 @@ import {
   stripContentFromLibrary,
 } from "./server/library-hard-delete.mjs";
 import { createTranscriptionService } from "./server/transcription-service.mjs";
+import { createProjectIndex, moveProjectIndex, removeProjectIndex } from "./server/project-index.mjs";
 import {
   isPathInside,
   validateContentId,
   validateProjectAssetPath,
   validateReadableLibraryAssetPath,
 } from "./server/path-security.mjs";
+import {
+  eagleItemInfo,
+  importPathToEagle,
+  resolveEagleOriginalPath,
+  serveEagleMedia,
+  setEagleAnnotation,
+} from "./server/eagle-adapter.mjs";
+import { eagleFolderIdForAsset } from "./src/services/eagle-asset-routing.js";
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const packageMetadata = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
@@ -148,8 +158,10 @@ function localMediaAvailable(item = {}) {
   ].some((asset) => (
     asset?.localPath
     || asset?.relativePath
+    || asset?.eagleItemId
     || String(asset?.src || "").startsWith("/library-assets/")
-  )) || String(item.videoLocalPath || "").startsWith("/library-assets/");
+  )) || String(item.videoLocalPath || "").startsWith("/library-assets/")
+    || Boolean(item.eagleItemId);
 }
 
 function existingInspirationScore(item = {}) {
@@ -634,14 +646,22 @@ function replaceLocalContentImages(currentItem, incomingImages) {
     }));
 }
 
-function mergeImageAssets(currentItem, images, videoLocalPath = "") {
+function mergeImageAssets(currentItem, images, videoLocalPath = "", eagleVideoAsset = null) {
   const otherAssets = (Array.isArray(currentItem?.mediaAssets) ? currentItem.mediaAssets : [])
-    .filter((asset) => !["content_image", "captured_video"].includes(asset?.role));
+    .filter((asset) => !["content_image", "captured_video", "inspiration_video"].includes(asset?.role));
   const relativeVideoPath = String(videoLocalPath || "")
     .replace(/^\/library-assets\//, "")
     .replace(/^\/+/, "");
-  const videoAsset = relativeVideoPath
+  const videoAsset = eagleVideoAsset?.eagleItemId
     ? [{
+        ...eagleVideoAsset,
+        id: eagleVideoAsset.id || `${currentItem.id}-captured-video`,
+        role: eagleVideoAsset.role || "captured_video",
+        order: Number(eagleVideoAsset.order) || 1,
+        version: Number(eagleVideoAsset.version) || Number(currentItem.mediaVersion) || 1,
+      }]
+    : relativeVideoPath
+      ? [{
         id: `${currentItem.id}-captured-video`,
         role: "captured_video",
         localPath: `/library-assets/${relativeVideoPath}`,
@@ -649,7 +669,7 @@ function mergeImageAssets(currentItem, images, videoLocalPath = "") {
         order: 1,
         version: Number(currentItem.mediaVersion) || 1,
       }]
-    : [];
+      : [];
   return [
     ...otherAssets,
     ...images
@@ -898,6 +918,21 @@ async function patchInspiration(payload, requestSessionId, libraryManager) {
 
 function mergeExtractionIntoInspiration(currentItem, extraction) {
   const extractedImages = replaceLocalContentImages(currentItem, extraction.images || []);
+  const extractedEagleVideo = extraction.eagleItemId
+    ? {
+        id: `${currentItem.id}-captured-video`,
+        role: "captured_video",
+        storageProvider: "eagle",
+        eagleItemId: String(extraction.eagleItemId),
+        eagleFolderId: String(extraction.eagleFolderId || eagleFolderIdForAsset({ assetRole: "inspiration_video" })),
+        src: extraction.videoPreviewUrl || "",
+        contentType: "video",
+        size: Number(extraction.mediaAssets?.find?.((asset) => asset?.eagleItemId)?.size) || 0,
+        name: extraction.mediaAssets?.find?.((asset) => asset?.eagleItemId)?.name || "",
+        order: 1,
+        version: Number(currentItem.mediaVersion) || 1,
+      }
+    : currentItem.mediaAssets?.find?.((asset) => asset?.eagleItemId) || null;
   const isPlaceholderTitle = !currentItem.title || currentItem.title.startsWith("待整理：");
   const extractedBody = String(extraction.body || "").trim();
   const currentBody = String(currentItem.body || "").trim();
@@ -947,13 +982,21 @@ function mergeExtractionIntoInspiration(currentItem, extraction) {
     authorUrl: extraction.authorUrl || currentItem.authorUrl || "",
     contentType: extraction.contentType || currentItem.contentType || (extractedImages.length ? "image_set" : ""),
     images: extractedImages.length ? extractedImages : (currentItem.images || []),
-    mediaAssets: extractedImages.length || extraction.videoLocalPath || currentItem.videoLocalPath
-      ? mergeImageAssets(currentItem, extractedImages.length ? extractedImages : (currentItem.images || []), extraction.videoLocalPath || currentItem.videoLocalPath)
+    mediaAssets: extractedImages.length || extraction.videoLocalPath || extraction.eagleItemId || currentItem.videoLocalPath || extractedEagleVideo
+      ? mergeImageAssets(
+          currentItem,
+          extractedImages.length ? extractedImages : (currentItem.images || []),
+          extraction.videoLocalPath || currentItem.videoLocalPath,
+          extractedEagleVideo,
+        )
       : (currentItem.mediaAssets || []),
     coverUrl: extraction.coverUrl || currentItem.coverUrl || "",
     coverLocalPath: extraction.coverLocalPath || extractedImages[0]?.localPath || currentItem.coverLocalPath || "",
     videoUrl: extraction.videoUrl || currentItem.videoUrl || "",
-    videoPreviewUrl: extraction.videoLocalPath || extraction.videoPreviewUrl || currentItem.videoLocalPath || currentItem.videoPreviewUrl || "",
+    eagleItemId: extraction.eagleItemId || currentItem.eagleItemId || extractedEagleVideo?.eagleItemId || "",
+    eagleFolderId: extraction.eagleFolderId || currentItem.eagleFolderId || extractedEagleVideo?.eagleFolderId || "",
+    storageProvider: extraction.eagleItemId ? "eagle" : (currentItem.storageProvider || ""),
+    videoPreviewUrl: extraction.videoPreviewUrl || extraction.videoLocalPath || currentItem.videoPreviewUrl || currentItem.videoLocalPath || "",
     videoLocalPath: extraction.videoLocalPath || currentItem.videoLocalPath || "",
     publishedAt: extraction.publishedAt || currentItem.publishedAt || "",
     duration: extraction.duration || currentItem.duration || "",
@@ -962,7 +1005,7 @@ function mergeExtractionIntoInspiration(currentItem, extraction) {
     parseState: extraction.parseState || currentItem.parseState || "success",
     parseStage: extraction.parseState === "success" ? "扒取完成" : extraction.parseState === "partial" ? "部分完成" : currentItem.parseStage,
     parseProgress: extraction.parseState === "success" ? 100 : extraction.parseState === "partial" ? 72 : currentItem.parseProgress,
-    acquisitionState: extractedImages.length || extraction.videoLocalPath || localMediaAvailable(currentItem)
+    acquisitionState: extractedImages.length || extraction.videoLocalPath || extraction.eagleItemId || localMediaAvailable(currentItem)
       ? "acquired"
       : currentItem.acquisitionState || "pending",
     refreshState: extraction.parseState || "success",
@@ -987,7 +1030,7 @@ function mergeExtractionIntoInspiration(currentItem, extraction) {
       publishedAt: extraction.publishedAt || currentItem.publishedAt || "",
     },
     metricsSnapshots: [...(currentItem.metricsSnapshots || []), metricsSnapshot],
-    mediaAvailability: extractedImages.length || extraction.videoLocalPath
+    mediaAvailability: extractedImages.length || extraction.videoLocalPath || extraction.eagleItemId
       ? "available"
       : currentItem.mediaAvailability,
     mediaVersion: Number(currentItem.mediaVersion) || 1,
@@ -1173,24 +1216,43 @@ async function recoverContentUnitImages({ libraryManager, sessionId, contentId }
   }, sessionId || "");
 }
 
-async function downloadVideo(videoUrl, itemId, evidence, libraryManager, referer = "https://www.douyin.com/", sessionHeaders = {}) {
+export async function downloadVideo(videoUrl, itemId, evidence, libraryManager, referer = "https://www.douyin.com/", sessionHeaders = {}) {
   if (!/^https?:\/\//i.test(videoUrl || "") || !itemId) return {};
-  const storage = await libraryManager.ensureCurrentLibrary();
   const contentId = validateContentId(itemId);
-  const relativeDirectory = `content-units/${contentId}/media/captured-video`;
-  const relativePath = `${relativeDirectory}/video.mp4`;
-  const libraryRoot = await resolveLibraryRoot(storage);
-  const absoluteDirectory = await ensureSafeWriteDirectory(libraryRoot, relativeDirectory);
-  const filePath = await resolveSafeWriteFile(absoluteDirectory, "video.mp4");
-  const localPath = `/library-assets/${relativePath}`;
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const existing = await fs.stat(filePath).catch(() => null);
-  if (existing?.isFile() && existing.size > 64 * 1024) {
-    evidence.push(`视频已存在本地资料库: ${relativePath}`);
-    return { videoLocalPath: localPath, videoPreviewUrl: localPath };
+  const library = await libraryManager.readLibrary();
+  const currentItem = (library.inspirations || []).find((item) => item?.id === contentId);
+  const existingAsset = [
+    ...(Array.isArray(currentItem?.mediaAssets) ? currentItem.mediaAssets : []),
+    currentItem?.eagleItemId ? currentItem : null,
+  ].find((asset) => asset?.eagleItemId);
+  if (existingAsset?.eagleItemId) {
+    const folderId = existingAsset.eagleFolderId || eagleFolderIdForAsset({ assetRole: "inspiration_video" });
+    try {
+      const item = await eagleItemInfo(existingAsset.eagleItemId);
+      evidence.push(`已复用 Eagle 灵感视频: ${item.id}`);
+      return {
+        eagleItemId: item.id,
+        eagleFolderId: folderId,
+        storageProvider: "eagle",
+        videoPreviewUrl: `/api/eagle-media/${encodeURIComponent(item.id)}`,
+        mediaAssets: [{
+          id: `${contentId}-captured-video`,
+          role: "captured_video",
+          storageProvider: "eagle",
+          eagleItemId: item.id,
+          eagleFolderId: folderId,
+          contentType: "video",
+          size: Number(item.size) || 0,
+          name: item.name || "",
+        }],
+      };
+    } catch (error) {
+      evidence.push(`已记录的 Eagle 灵感视频不可用，将重新导入: ${error.message}`);
+    }
   }
 
-  const temporaryPath = `${filePath}.${Date.now()}.tmp`;
+  const folderId = eagleFolderIdForAsset({ assetRole: "inspiration_video" });
+  let tempDir = "";
   try {
     const response = await fetch(videoUrl, {
       headers: {
@@ -1209,17 +1271,41 @@ async function downloadVideo(videoUrl, itemId, evidence, libraryManager, referer
       evidence.push("视频保存失败: 响应没有媒体内容");
       return {};
     }
-    await pipeline(Readable.fromWeb(response.body), createWriteStream(temporaryPath, { flags: "wx" }));
-    const stored = await fs.stat(temporaryPath);
-    if (stored.size <= 64 * 1024) throw new Error("下载到的视频文件过小");
-    await fs.rename(temporaryPath, filePath);
-    evidence.push(`视频已保存: ${relativePath} (${Math.ceil(stored.size / 1024 / 1024)} MB)`);
-    return { videoLocalPath: localPath, videoPreviewUrl: localPath };
+    const temp = await writeTempUploadFile(Readable.fromWeb(response.body), `${contentId}-inspiration.mp4`);
+    tempDir = temp.tempDir;
+    if (temp.size <= 64 * 1024) throw new Error("下载到的视频文件过小");
+    const { item, mediaSrc } = await verifiedEagleImport({
+      tempPath: temp.tempPath,
+      folderId,
+      originalName: `${contentId}-inspiration.mp4`,
+      contentId,
+      role: "inspiration_video",
+      accountRole: "",
+      size: temp.size,
+      contentType: contentType || "video/mp4",
+    });
+    evidence.push(`视频已导入 Eagle: ${item.id} (${Math.ceil(temp.size / 1024 / 1024)} MB)`);
+    return {
+      eagleItemId: item.id,
+      eagleFolderId: folderId,
+      storageProvider: "eagle",
+      videoPreviewUrl: mediaSrc,
+      mediaAssets: [{
+        id: `${contentId}-captured-video`,
+        role: "captured_video",
+        storageProvider: "eagle",
+        eagleItemId: item.id,
+        eagleFolderId: folderId,
+        contentType: contentType || "video/mp4",
+        size: temp.size,
+        name: `${contentId}-inspiration.mp4`,
+      }],
+    };
   } catch (error) {
-    evidence.push(`视频保存异常: ${error.message}`);
+    evidence.push(`视频导入 Eagle 异常: ${error.message}`);
     return {};
   } finally {
-    await fs.rm(temporaryPath, { force: true }).catch(() => {});
+    if (tempDir) await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -2108,13 +2194,29 @@ async function addTranscription(result, payload, libraryManager) {
   if (result.transcript) {
     return { ...result, transcriptSource: result.transcriptSource || "platform_caption", transcriptState: "complete" };
   }
+  const eagleItemId = String(
+    result.eagleItemId
+      || result.mediaAssets?.find?.((asset) => asset?.eagleItemId)?.eagleItemId
+      || "",
+  ).trim();
   const relativePath = String(result.videoLocalPath || "").replace(/^\/library-assets\//, "").replace(/^\/+/, "");
-  if (!relativePath) return { ...result, transcriptState: "waiting_media", transcriptStatus: "等待本地视频后生成逐字稿" };
+  if (!eagleItemId && !relativePath) return { ...result, transcriptState: "waiting_media", transcriptStatus: "等待 Eagle 视频后生成逐字稿" };
+  let temporaryDir = "";
   try {
-    const storage = libraryManager.requireActive(payload.sessionId || "");
-    const resolved = await resolveExistingLibraryTarget(storage, relativePath);
-    if (resolved.state !== "available") throw new Error(resolved.state === "offline" ? "资料库当前离线" : "本地视频不可用");
-    const transcript = await transcriptionService.transcribe(resolved.targetPath, {
+    let sourcePath = "";
+    if (eagleItemId) {
+      const item = await eagleItemInfo(eagleItemId);
+      const original = await resolveEagleOriginalPath(item);
+      temporaryDir = await fs.mkdtemp(path.join(os.tmpdir(), "video-studio-transcription-"));
+      sourcePath = path.join(temporaryDir, path.basename(original.filePath));
+      await fs.copyFile(original.filePath, sourcePath, fsConstants.COPYFILE_EXCL);
+    } else {
+      const storage = libraryManager.requireActive(payload.sessionId || "");
+      const resolved = await resolveExistingLibraryTarget(storage, relativePath);
+      if (resolved.state !== "available") throw new Error(resolved.state === "offline" ? "资料库当前离线" : "本地视频不可用");
+      sourcePath = resolved.targetPath;
+    }
+    const transcript = await transcriptionService.transcribe(sourcePath, {
       platformTranscript: result.transcript || "",
       duration: result.duration,
     });
@@ -2126,6 +2228,8 @@ async function addTranscription(result, payload, libraryManager) {
       transcriptStatus: "逐字稿稍后自动补转",
       transcriptError: sanitizeEvidence([error.message])[0] || "转写失败",
     };
+  } finally {
+    if (temporaryDir) await fs.rm(temporaryDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -2537,7 +2641,59 @@ function safeFilePart(value, fallback) {
   return normalized || fallback;
 }
 
-async function storeUploadedCover(bytes, projectId, encodedName, storage) {
+async function writeTempUploadFile(source, originalName) {
+  // Eagle's addFromPath process cannot reliably access the per-process
+  // /var/folders temporary directory. Use the shared macOS temp root and
+  // remove this directory immediately after Eagle confirms or rejects import.
+  const tempRoot = process.env.VIDEO_STUDIO_EAGLE_TEMP_ROOT || "/private/tmp";
+  const tempDir = await fs.mkdtemp(path.join(tempRoot, "video-studio-eagle-upload-"));
+  const tempPath = path.join(tempDir, safeFilePart(path.basename(originalName || "upload.bin"), "upload"));
+  let size = 0;
+  const meter = new Transform({
+    transform(chunk, encoding, callback) {
+      size += chunk.length;
+      callback(null, chunk);
+    },
+  });
+  if (Buffer.isBuffer(source)) {
+    size = source.length;
+    await fs.writeFile(tempPath, source, { flag: "wx" });
+  } else {
+    await pipeline(source, meter, createWriteStream(tempPath, { flags: "wx" }));
+  }
+  return { tempDir, tempPath, size };
+}
+
+async function verifiedEagleImport({ tempPath, folderId, originalName, contentId, role, accountRole, size, contentType }) {
+  const imported = await importPathToEagle({
+    filePath: tempPath,
+    folderId,
+    name: originalName,
+    tags: [
+      "视频中台",
+      `content:${contentId}`,
+      ...(role ? [`asset:${role}`] : []),
+      ...(accountRole ? [`account:${accountRole}`] : []),
+    ],
+  });
+  const item = await eagleItemInfo(imported.id, {
+    eagleItemInfoAttempts: 240,
+    eagleItemInfoRetryDelayMs: 500,
+  });
+  if (!Array.isArray(item.folders) || !item.folders.includes(folderId)) {
+    throw apiError("Eagle 导入后未关联目标文件夹", 502);
+  }
+  if (Number(item.size) !== Number(size)) {
+    throw apiError("Eagle 导入后文件大小校验失败", 502);
+  }
+  return {
+    item,
+    mediaSrc: `/api/eagle-media/${encodeURIComponent(item.id)}?folderId=${encodeURIComponent(folderId)}`,
+    contentType: contentType || "",
+  };
+}
+
+async function storeUploadedCover(bytes, projectId, encodedName, accountRoleValue = "blogger") {
   if (!bytes.length) throw new Error("没有收到封面文件");
   const imageType = detectImageType(bytes);
   let originalName = "cover";
@@ -2546,24 +2702,39 @@ async function storeUploadedCover(bytes, projectId, encodedName, storage) {
   } catch {
     originalName = String(encodedName || "cover");
   }
-  const uniquePart = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const contentId = validateContentId(projectId);
-  const storedName = `${uniquePart}.${imageType.ext}`;
-  const relativeDirectory = `content-units/${contentId}/covers`;
-  const relativePath = `${relativeDirectory}/${storedName}`;
-  const libraryRoot = await resolveLibraryRoot(storage);
-  const absoluteDirectory = await ensureSafeWriteDirectory(libraryRoot, relativeDirectory);
-  const absolutePath = await resolveSafeWriteFile(absoluteDirectory, storedName, { mustNotExist: true });
-  await fs.writeFile(absolutePath, bytes, { flag: "wx" });
-  return {
-    id: `cover-${uniquePart}`,
-    name: path.basename(originalName),
-    src: `/library-assets/${relativePath}`,
-    contentType: imageType.contentType,
-    size: bytes.length,
-    addedAt: new Date().toISOString(),
-    relativePath,
-  };
+  const accountRole = canonicalProjectAccountRole(accountRoleValue || "blogger");
+  const folderId = eagleFolderIdForAsset({ accountRole, assetRole: "cover" });
+  if (!folderId) throw apiError("封面 Eagle 目标文件夹未配置", 500);
+  const uniquePart = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const fileName = `${safeFilePart(path.basename(originalName, path.extname(originalName)), "cover")}.${imageType.ext}`;
+  const { tempDir, tempPath } = await writeTempUploadFile(bytes, fileName);
+  try {
+    const { item, mediaSrc } = await verifiedEagleImport({
+      tempPath,
+      folderId,
+      originalName: path.basename(originalName),
+      contentId,
+      role: "cover",
+      accountRole,
+      size: bytes.length,
+      contentType: imageType.contentType,
+    });
+    return {
+      id: `cover-${accountRole}-${uniquePart}`,
+      name: path.basename(originalName),
+      accountRole,
+      storageProvider: "eagle",
+      eagleItemId: item.id,
+      eagleFolderId: folderId,
+      src: mediaSrc,
+      contentType: imageType.contentType,
+      size: bytes.length,
+      addedAt: new Date().toISOString(),
+    };
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 function decodeUploadName(encodedName, fallback) {
@@ -2633,61 +2804,64 @@ async function storeUploadedProjectMedia(
   if (!contentId.startsWith("C")) throw apiError("视频只能上传到创作内容", 400);
   const role = canonicalProjectMediaRole(roleValue);
   const accountRole = canonicalProjectAccountRole(accountRoleValue);
+  const folderId = eagleFolderIdForAsset({ accountRole, assetRole: role });
+  if (!folderId) throw apiError("视频 Eagle 目标文件夹未配置", 500);
   const uploadId = projectMediaUploadId(uploadIdValue);
   const uploadKey = `${path.resolve(storage.libraryDir)}:${contentId}:${role}:${accountRole}`;
   projectMediaUploadTokens.set(uploadKey, uploadId);
   const originalName = decodeUploadName(encodedName, "video.mp4");
   const videoType = projectVideoType(originalName, req.headers["content-type"]);
   const uniquePart = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-  const baseName = safeFilePart(path.basename(originalName, videoType.extension), "video");
-  const storedName = `${uniquePart}-${baseName}${videoType.extension}`;
-  const relativeDirectory = `content-units/${contentId}/media/${role === "source_video" ? "source-video" : "finished-video"}`;
-  const relativePath = `${relativeDirectory}/${storedName}`;
-  const libraryRoot = await resolveLibraryRoot(storage);
-  const absoluteDirectory = await ensureSafeWriteDirectory(libraryRoot, relativeDirectory);
-  const absolutePath = await resolveSafeWriteFile(absoluteDirectory, storedName, { mustNotExist: true });
-  const partialPath = `${absolutePath}.part`;
+  const tempName = `${uniquePart}-${safeFilePart(path.basename(originalName, videoType.extension), "video")}${videoType.extension}`;
+  let tempDir = "";
+  let tempPath = "";
   let size = 0;
-  const meter = new Transform({
-    transform(chunk, encoding, callback) {
-      size += chunk.length;
-      callback(null, chunk);
-    },
-  });
 
   try {
-    await pipeline(req, meter, createWriteStream(partialPath, { flags: "wx" }));
+    const temp = await writeTempUploadFile(req, tempName);
+    tempDir = temp.tempDir;
+    tempPath = temp.tempPath;
+    size = temp.size;
     if (!size) throw new Error("没有收到视频文件");
     verifySession();
     if (projectMediaUploadTokens.get(uploadKey) !== uploadId) {
       throw apiError("同一上传位置已有更新的视频", 409);
     }
-    await fs.rename(partialPath, absolutePath);
+    const { item, mediaSrc } = await verifiedEagleImport({
+      tempPath,
+      folderId,
+      originalName,
+      contentId,
+      role,
+      accountRole,
+      size,
+      contentType: videoType.contentType,
+    });
     if (projectMediaUploadTokens.get(uploadKey) !== uploadId) {
-      await fs.rm(absolutePath, { force: true }).catch(() => {});
       throw apiError("同一上传位置已有更新的视频", 409);
     }
+    return {
+      id: `media-${role}-${accountRole}-${uniquePart}`,
+      role,
+      accountRole,
+      order: accountRole === "ip" ? 2 : 1,
+      name: originalName,
+      src: mediaSrc,
+      storageProvider: "eagle",
+      eagleItemId: item.id,
+      eagleFolderId: folderId,
+      contentType: videoType.contentType,
+      size,
+      addedAt: new Date().toISOString(),
+    };
   } catch (error) {
-    await fs.rm(partialPath, { force: true }).catch(() => {});
     throw error;
   } finally {
+    if (tempDir) await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
     if (projectMediaUploadTokens.get(uploadKey) === uploadId) {
       projectMediaUploadTokens.delete(uploadKey);
     }
   }
-
-  return {
-    id: `media-${role}-${accountRole}-${uniquePart}`,
-    role,
-    accountRole,
-    order: accountRole === "ip" ? 2 : 1,
-    name: originalName,
-    src: `/library-assets/${relativePath}`,
-    relativePath,
-    contentType: videoType.contentType,
-    size,
-    addedAt: new Date().toISOString(),
-  };
 }
 
 function projectMediaRole(value, fallback = "") {
@@ -2733,6 +2907,10 @@ function projectMediaMatches(asset, role, target) {
   if (projectMediaRole(asset.role, role) !== target.role) return false;
   const assetAccountRole = projectMediaAccountRole(asset.accountRole);
   if (target.legacyAccountRole ? assetAccountRole : assetAccountRole !== target.accountRole) return false;
+  if (target.eagleItemId) {
+    if (String(asset.eagleItemId || "") !== target.eagleItemId) return false;
+    return !target.mediaId || !asset.id || String(asset.id) === target.mediaId;
+  }
   const assetPath = projectMediaRelativePath(asset);
   if (assetPath !== target.relativePath) return false;
   return !target.mediaId || !asset.id || String(asset.id) === target.mediaId;
@@ -2789,18 +2967,21 @@ function indexedContentRecords(library = {}) {
   ].filter(Boolean);
 }
 
-async function deleteProjectMediaContent(payload, requestSessionId, libraryManager) {
+export async function deleteProjectMediaContent(payload, requestSessionId, libraryManager) {
   const contentId = validateContentId(payload.projectId);
   if (!contentId.startsWith("C")) throw apiError("只能删除创作内容中的视频", 400);
   const role = canonicalProjectMediaRole(payload.role);
   const accountRole = canonicalProjectAccountRole(payload.accountRole);
   const legacyAccountRole = payload.legacyAccountRole === true;
   const scope = role;
-  const relativePath = validateProjectAssetPath({
-    contentId,
-    relativePath: payload.relativePath,
-    scope,
-  });
+  const eagleItemId = String(payload.eagleItemId || "").trim();
+  const relativePath = eagleItemId
+    ? ""
+    : validateProjectAssetPath({
+      contentId,
+      relativePath: payload.relativePath,
+      scope,
+    });
   const mediaId = String(payload.mediaId || "");
   const target = {
     contentId,
@@ -2808,6 +2989,7 @@ async function deleteProjectMediaContent(payload, requestSessionId, libraryManag
     accountRole,
     legacyAccountRole,
     relativePath,
+    eagleItemId,
     mediaId,
   };
 
@@ -2822,11 +3004,11 @@ async function deleteProjectMediaContent(payload, requestSessionId, libraryManag
       ))
     ));
     const canonicalRoot = `content-units/${contentId}/media/${role === "source_video" ? "source-video" : "finished-video"}/`;
-    if (!indexedTarget && !relativePath.startsWith(canonicalRoot)) {
+    if (!indexedTarget && (!relativePath || !relativePath.startsWith(canonicalRoot))) {
       throw apiError("这条视频不属于当前内容单元", 403);
     }
 
-    const sharedByOtherContent = contentRecords.some((record) => (
+    const sharedByOtherContent = relativePath && contentRecords.some((record) => (
       String(record.id || "") !== contentId
       && projectMediaEntries(record).some(({ asset }) => projectMediaRelativePath(asset) === relativePath)
     ));
@@ -2834,7 +3016,9 @@ async function deleteProjectMediaContent(payload, requestSessionId, libraryManag
       throw apiError("这条文件仍被其他内容使用，已停止永久删除", 409);
     }
 
-    const resolved = await resolveExistingLibraryTarget(paths, relativePath);
+    const resolved = relativePath
+      ? await resolveExistingLibraryTarget(paths, relativePath)
+      : { state: "eagle" };
     if (resolved.state === "offline") throw apiError("当前资料库或所在卷不可访问", 503);
     let stagedPath = "";
     if (resolved.state === "available") {
@@ -2870,6 +3054,7 @@ async function deleteProjectMediaContent(payload, requestSessionId, libraryManag
         role,
         accountRole,
         relativePath,
+        eagleItemId,
         fileDeleted: resolved.state === "available",
         previousState: resolved.state,
       },
@@ -2923,6 +3108,23 @@ export async function projectAssetStates(payload, requestSessionId, libraryManag
 
   for (const [index, asset] of assets.entries()) {
     const key = String(asset?.key || `asset-${index}`);
+    if (asset?.eagleItemId) {
+      try {
+        const item = await eagleItemInfo(asset.eagleItemId);
+        states[key] = {
+          state: item.isDeleted ? "missing" : "available",
+          eagleItemId: item.id,
+          eagleFolderId: asset.eagleFolderId || "",
+        };
+      } catch {
+        states[key] = {
+          state: "missing",
+          eagleItemId: String(asset.eagleItemId || ""),
+          eagleFolderId: asset.eagleFolderId || "",
+        };
+      }
+      continue;
+    }
     if (!asset?.relativePath) {
       states[key] = { state: "not_added", relativePath: "" };
       continue;
@@ -3184,9 +3386,108 @@ function installLibraryApi(server, libraryManager, options = {}) {
           }
           return;
         }
-        if (!req.url?.startsWith("/api/library") && !req.url?.startsWith("/api/content/") && !req.url?.startsWith("/api/content-ids") && !req.url?.startsWith("/api/extract") && !req.url?.startsWith("/api/profile-scans") && !req.url?.startsWith("/api/transcription/") && !req.url?.startsWith("/api/covers") && !req.url?.startsWith("/api/project-media") && !req.url?.startsWith("/api/project-actions") && !req.url?.startsWith("/api/project-assets/status") && !req.url?.startsWith("/api/auth/") && !req.url?.startsWith("/api/inspirations/")) return next();
+        if (req.url?.startsWith("/api/eagle-media/") && ["GET", "HEAD"].includes(req.method || "")) {
+          await serveEagleMedia(req, res, options);
+          return;
+        }
+        if (!req.url?.startsWith("/api/library") && !req.url?.startsWith("/api/content/") && !req.url?.startsWith("/api/content-ids") && !req.url?.startsWith("/api/extract") && !req.url?.startsWith("/api/profile-scans") && !req.url?.startsWith("/api/transcription/") && !req.url?.startsWith("/api/covers") && !req.url?.startsWith("/api/project-media") && !req.url?.startsWith("/api/project-actions") && !req.url?.startsWith("/api/project-assets/status") && !req.url?.startsWith("/api/projects/") && !req.url?.startsWith("/api/eagle-items/") && !req.url?.startsWith("/api/auth/") && !req.url?.startsWith("/api/inspirations/")) return next();
         res.setHeader("content-type", "application/json; charset=utf-8");
         try {
+          if (req.url.startsWith("/api/eagle-items/")) {
+            const requestUrl = new URL(req.url, "http://local");
+            const match = requestUrl.pathname.match(/^\/api\/eagle-items\/([^/]+)\/annotation$/);
+            if (!match) {
+              res.statusCode = 404;
+              res.end(JSON.stringify({ error: "找不到这个 Eagle item 接口" }));
+              return;
+            }
+            const itemId = decodeURIComponent(match[1]);
+            if (req.method === "GET") {
+              const item = await eagleItemInfo(itemId, options);
+              res.end(JSON.stringify({
+                itemId: item.id,
+                annotation: String(item.annotation || ""),
+                url: item.url || "",
+                folders: item.folders || [],
+              }));
+              return;
+            }
+            if (req.method === "PATCH") {
+              await libraryManager.requireWritable(req.headers["x-library-session-id"] || "");
+              const payload = await readJsonBody(req);
+              const item = await setEagleAnnotation(itemId, String(payload.annotation || ""), options);
+              res.end(JSON.stringify({
+                itemId: item.id,
+                annotation: String(item.annotation || ""),
+                url: item.url || "",
+                folders: item.folders || [],
+              }));
+              return;
+            }
+            res.statusCode = 405;
+            res.end(JSON.stringify({ error: "Method not allowed" }));
+            return;
+          }
+          if (req.url.startsWith("/api/projects/")) {
+            const requestUrl = new URL(req.url, "http://local");
+            if (requestUrl.pathname === "/api/projects/index") {
+              if (req.method !== "POST") {
+                res.statusCode = 405;
+                res.end(JSON.stringify({ error: "Method not allowed" }));
+                return;
+              }
+              const payload = await readJsonBody(req);
+              const result = await createProjectIndex({
+                project: payload.project,
+                sessionId: req.headers["x-library-session-id"] || "",
+                expectedRevision: req.headers["x-library-revision"] || "",
+                libraryManager,
+              });
+              res.statusCode = 201;
+              res.end(JSON.stringify(result));
+              return;
+            }
+            const stateMatch = requestUrl.pathname.match(/^\/api\/projects\/([^/]+)\/(archive|restore)$/);
+            if (stateMatch) {
+              if (req.method !== "POST") {
+                res.statusCode = 405;
+                res.end(JSON.stringify({ error: "Method not allowed" }));
+                return;
+              }
+              const payload = await readJsonBody(req);
+              const result = await moveProjectIndex({
+                projectId: decodeURIComponent(stateMatch[1]),
+                destination: stateMatch[2] === "archive" ? "archive" : "projects",
+                fallbackProject: payload.project,
+                sessionId: req.headers["x-library-session-id"] || "",
+                expectedRevision: req.headers["x-library-revision"] || "",
+                libraryManager,
+              });
+              res.end(JSON.stringify(result));
+              return;
+            }
+            const match = requestUrl.pathname.match(/^\/api\/projects\/([^/]+)\/index$/);
+            if (!match) {
+              res.statusCode = 404;
+              res.end(JSON.stringify({ error: "找不到这个项目索引接口" }));
+              return;
+            }
+            if (req.method !== "DELETE") {
+              res.statusCode = 405;
+              res.end(JSON.stringify({ error: "Method not allowed" }));
+              return;
+            }
+            const payload = await readJsonBody(req);
+            const result = await removeProjectIndex({
+              projectId: decodeURIComponent(match[1]),
+              sessionId: req.headers["x-library-session-id"] || "",
+              expectedRevision: req.headers["x-library-revision"] || "",
+              projectPatches: payload?.projectPatches,
+              libraryManager,
+            });
+            res.end(JSON.stringify(result));
+            return;
+          }
           if (req.url.startsWith("/api/content/")) {
             if (req.method !== "DELETE") {
               res.statusCode = 405;
@@ -3294,14 +3595,15 @@ function installLibraryApi(server, libraryManager, options = {}) {
             }
             const requestUrl = new URL(req.url, "http://local");
             const projectId = requestUrl.searchParams.get("projectId");
+            const accountRole = requestUrl.searchParams.get("accountRole") || "blogger";
             if (!projectId) {
               res.statusCode = 400;
               res.end(JSON.stringify({ error: "缺少内容 ID" }));
               return;
             }
             const bytes = await readBinaryBody(req);
-            const storage = await libraryManager.requireWritable(req.headers["x-library-session-id"] || "");
-            const cover = await storeUploadedCover(bytes, projectId, req.headers["x-file-name"], storage);
+            await libraryManager.requireWritable(req.headers["x-library-session-id"] || "");
+            const cover = await storeUploadedCover(bytes, projectId, req.headers["x-file-name"], accountRole);
             res.statusCode = 201;
             res.end(JSON.stringify({ cover }));
             return;

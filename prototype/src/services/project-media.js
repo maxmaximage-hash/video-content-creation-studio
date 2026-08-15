@@ -45,8 +45,9 @@ export function uploadProjectMediaFile({
   });
 }
 
-export async function uploadProjectCoverFile({ file, projectId, sessionId }) {
-  const response = await fetch(`/api/covers?projectId=${encodeURIComponent(projectId)}`, {
+export async function uploadProjectCoverFile({ file, projectId, accountRole = "blogger", sessionId }) {
+  const query = new URLSearchParams({ projectId, accountRole });
+  const response = await fetch(`/api/covers?${query}`, {
     method: "POST",
     headers: {
       "content-type": file.type || "application/octet-stream",
@@ -80,6 +81,7 @@ export async function deleteProjectMediaFile({
   accountRole,
   mediaId = "",
   relativePath,
+  eagleItemId = "",
   legacyAccountRole = false,
   sessionId = "",
 }) {
@@ -95,6 +97,7 @@ export async function deleteProjectMediaFile({
       accountRole,
       mediaId,
       relativePath,
+      eagleItemId,
       legacyAccountRole,
     }),
   });

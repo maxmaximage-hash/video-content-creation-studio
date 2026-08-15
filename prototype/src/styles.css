@@ -183,6 +183,9 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .media-preview.video-ready > img { opacity: 0; }
 .media-preview.video-ready > video { opacity: 1; }
 .media-hover-surface { position: absolute; z-index: 1; inset: 0; }
+.media-error-state { position: absolute; z-index: 5; inset: 0; display: grid; place-content: center; justify-items: center; gap: 6px; padding: 22px; color: #fff; background: rgba(21, 22, 21, .86); text-align: center; }
+.media-error-state strong { font-size: 13px; }
+.media-error-state small { max-width: 210px; color: #d3d6d0; font-size: 10px; line-height: 1.45; }
 .media-speed-control { position: absolute; z-index: 4; right: 48px; top: 10px; display: inline-flex; gap: 4px; opacity: 0; transform: translateY(-3px); transition: opacity .16s ease, transform .16s ease; pointer-events: auto; }
 .inspiration-card:hover .media-speed-control, .media-speed-control:focus-within { opacity: 1; transform: translateY(0); pointer-events: auto; }
 .media-speed-control button { height: 24px; min-width: 28px; padding: 0 4px; border: 0; border-bottom: 1px solid transparent; border-radius: 0; color: #fff; background: transparent; font-size: 10px; font-weight: 800; text-shadow: 0 1px 4px rgba(0,0,0,.78); cursor: pointer; }
@@ -248,6 +251,7 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .parse-status-line.blocked span, .parse-status-line.failed span, .parse-status-line.unsupported span { color: #b04135; }
 .parse-status-line.blocked, .parse-status-line.failed { border-color: #f0c6bf; background: #fff7f5; }
 .card-body-editor { position: relative; margin-top: 7px; }
+.card-body-state { margin-bottom: 5px; padding: 6px 8px; border: 1px solid #f0c6bf; border-radius: 6px; color: #b04135; background: #fff7f5; font-size: 10px; }
 .card-body-editor textarea {
   width: 100%;
   height: 68px;
@@ -263,6 +267,8 @@ button:disabled { opacity: .42; cursor: not-allowed; }
   line-height: 1.45;
 }
 .card-body-editor textarea:focus { border-color: rgba(214, 179, 106, .42); }
+.card-body-editor textarea:disabled { color: #8a8f88; background: #f6f7f4; cursor: not-allowed; }
+.card-body-saving { position: absolute; left: 8px; bottom: 8px; color: #969b95; font-size: 9px; }
 .card-copy-body-button {
   position: absolute;
   right: 6px;

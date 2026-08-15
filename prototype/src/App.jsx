@@ -5,13 +5,11 @@ import {
   formatDuration,
   platformTone,
 } from "./features/inspirations/inspiration-model.js";
-import {
-  ArchivePage,
-  createArchiveSnapshot,
-} from "./pages/archive/ArchivePage.jsx";
 import { CreationPage } from "./pages/creation/CreationPage.jsx";
 import { InspirationsPage } from "./pages/inspirations/InspirationsPage.jsx";
 import { QueuePage } from "./pages/queue/QueuePage.jsx";
+import { ArchivePage } from "./pages/archive/ArchivePage.jsx";
+import { projectPrimaryCopy } from "./pages/queue/content-variants.js";
 import {
   clearProjectContent,
   coverSource,
@@ -32,8 +30,8 @@ import {
   uploadProjectCoverFile,
   uploadProjectMediaFile,
 } from "./services/project-media.js";
+import { eagleMediaSource } from "./services/eagle-media.js";
 import {
-  Archive,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -55,13 +53,14 @@ import {
 
 const defaultCategories = [];
 const legacyPresetCategories = new Set(["情感", "展示面", "认知", "教程"]);
-const appBuildLabel = `v${__APP_VERSION__} · ${__APP_COMMIT__}${__APP_DIRTY__ ? " · 未提交" : ""}`;
+const appVersionLabel = `V${String(__APP_VERSION__).split(".").slice(0, 2).join(".")}`;
+const appBuildLabel = `${appVersionLabel} · ${__APP_COMMIT__}${__APP_DIRTY__ ? " · 未提交" : ""}`;
 
 const navItems = [
   { id: "inspirations", label: "灵感库", icon: Lightbulb },
-  { id: "creation", label: "创作", icon: PencilLine },
-  { id: "queue", label: "待发布", icon: Inbox },
-  { id: "archive", label: "归档", icon: Archive },
+  { id: "creation", label: "编辑", icon: PencilLine },
+  { id: "queue", label: "创作台", icon: Inbox },
+  { id: "archive", label: "归档库", icon: FolderOpen },
 ];
 
 function formatNow() {
@@ -75,14 +74,12 @@ function formatNow() {
   }).format(new Date()).replaceAll("/", ".");
 }
 
-function compactTime() {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date()).replaceAll("/", ".");
+function optimisticContentId() {
+  const seconds = Math.floor(Date.now() / 1000);
+  const random = globalThis.crypto?.getRandomValues
+    ? globalThis.crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000
+    : Math.floor(Math.random() * 1_000_000);
+  return `C${seconds}${String(random).padStart(6, "0")}`;
 }
 
 function categoryValue(item) {
@@ -235,6 +232,67 @@ function stableLibrarySnapshot(payload) {
   return JSON.stringify(payload);
 }
 
+function sameStructuredValue(previous, next) {
+  if (Object.is(previous, next)) return true;
+  try {
+    return JSON.stringify(previous) === JSON.stringify(next);
+  } catch {
+    return false;
+  }
+}
+
+function savedLibraryPayload(snapshot) {
+  try {
+    const value = JSON.parse(snapshot || "");
+    return value && typeof value === "object" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function collectProjectPatchOperations(previous, next, path = [], operations = []) {
+  if (sameStructuredValue(previous, next)) return operations;
+  const previousObject = previous && typeof previous === "object";
+  const nextObject = next && typeof next === "object";
+  if (!previousObject || !nextObject || Array.isArray(previous) || Array.isArray(next)) {
+    operations.push({ path, value: next });
+    return operations;
+  }
+  const fields = new Set([...Object.keys(previous), ...Object.keys(next)]);
+  for (const field of fields) {
+    if (field === "id") continue;
+    const nextPath = [...path, field];
+    if (!Object.hasOwn(next, field)) {
+      operations.push({ path: nextPath, remove: true });
+    } else if (!Object.hasOwn(previous, field)) {
+      operations.push({ path: nextPath, value: next[field] });
+    } else {
+      collectProjectPatchOperations(previous[field], next[field], nextPath, operations);
+    }
+  }
+  return operations;
+}
+
+function dirtyProjectPatches(snapshot, projects, activeProject, removedProjectId) {
+  const saved = savedLibraryPayload(snapshot);
+  if (!saved) return [];
+  const baseline = new Map([
+    ...(saved.projects || []),
+    ...(saved.activeProject ? [saved.activeProject] : []),
+  ].filter((project) => project?.id).map((project) => [project.id, project]));
+  const current = new Map([
+    ...projects,
+    ...(activeProject ? [activeProject] : []),
+  ].filter((project) => project?.id).map((project) => [project.id, project]));
+  return [...current.entries()]
+    .filter(([projectId]) => projectId !== removedProjectId && baseline.has(projectId))
+    .map(([projectId, project]) => ({
+      projectId,
+      operations: collectProjectPatchOperations(baseline.get(projectId), project),
+    }))
+    .filter((patch) => patch.operations.length);
+}
+
 function IconButton({ label, children, className = "", onClick, disabled = false }) {
   return (
     <button
@@ -295,7 +353,7 @@ function CategoryManagerModal({ categories, counts, onAdd, onClose, notify }) {
   };
 
   return (
-    <Modal title="分类管理" description="单层分类会贯穿灵感、创作、待发布与归档。" onClose={onClose}>
+    <Modal title="分类管理" description="单层分类会贯穿灵感、创作台与归档库。" onClose={onClose}>
       <div className="category-manager">
         <div className="category-create-row">
           <input
@@ -384,7 +442,7 @@ function ClosedLibraryWorkspace({ busy, onAction }) {
   );
 }
 
-function AppSidebar({ page, setPage, queueCount, archivedCount, open, setOpen, storage, saveState, libraryBusy, onLibraryAction }) {
+function AppSidebar({ page, setPage, queueCount, archiveCount, open, setOpen, storage, saveState, libraryBusy, onLibraryAction }) {
   const [libraryMenuOpen, setLibraryMenuOpen] = useState(false);
   const chooseAction = (action) => {
     setLibraryMenuOpen(false);
@@ -395,8 +453,8 @@ function AppSidebar({ page, setPage, queueCount, archivedCount, open, setOpen, s
       <div className="brand-row">
         <div className="brand-mark"><img src="/app-icon.png" alt="" /></div>
         <div className="brand-copy">
-          <strong>创作台</strong>
-          <span>视频内容中台</span>
+          <strong>Video Hub</strong>
+          <span>{appVersionLabel}</span>
         </div>
         <IconButton label="收起导航" className="mobile-close" onClick={() => setOpen(false)}>
           <X size={18} />
@@ -406,7 +464,7 @@ function AppSidebar({ page, setPage, queueCount, archivedCount, open, setOpen, s
       <nav className="main-nav" aria-label="主导航">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const count = item.id === "queue" ? queueCount : item.id === "archive" ? archivedCount : null;
+          const count = item.id === "queue" ? queueCount : item.id === "archive" ? archiveCount : null;
           return (
             <button
               type="button"
@@ -454,7 +512,7 @@ function AppSidebar({ page, setPage, queueCount, archivedCount, open, setOpen, s
         </div>
         <span
           className={`prototype-label build-label${__APP_DIRTY__ ? " is-dirty" : ""}`}
-          title={`视频内容创作中台 ${appBuildLabel}`}
+          title={`Video Hub ${appBuildLabel}`}
         >
           {appBuildLabel}
         </span>
@@ -494,7 +552,7 @@ function MediaPreview({ item, compact = false }) {
   const videoRef = useRef(null);
   const manualPausedRef = useRef(false);
   const hoverTimerRef = useRef(null);
-  const autoMutedRef = useRef(false);
+  const userMutedRef = useRef(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [mediaDuration, setMediaDuration] = useState(0);
   const [isScrubbing, setIsScrubbing] = useState(false);
@@ -502,16 +560,19 @@ function MediaPreview({ item, compact = false }) {
   const [isMuted, setIsMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [videoReady, setVideoReady] = useState(false);
+  const [mediaError, setMediaError] = useState("");
   const coverSrc = coverSource(item);
-  const videoSrc = item.videoLocalPath || item.videoPreviewUrl || (item.videoUrl ? `/library-proxy/media?url=${encodeURIComponent(item.videoUrl)}` : "");
+  const eagleSrc = eagleMediaSource(item);
+  const videoSrc = eagleSrc || item.videoLocalPath || item.videoPreviewUrl || (item.videoUrl ? `/library-proxy/media?url=${encodeURIComponent(item.videoUrl)}` : "");
   const progress = mediaDuration > 0 ? Math.min(100, Math.max(0, (currentTime / mediaDuration) * 100)) : 0;
 
   useEffect(() => {
     setVideoReady(false);
+    setMediaError("");
     return () => clearTimeout(hoverTimerRef.current);
   }, [videoSrc]);
 
-  const play = async ({ allowMutedFallback = false } = {}) => {
+  const play = async () => {
     const video = videoRef.current;
     if (!video) return;
     clearTimeout(hoverTimerRef.current);
@@ -520,16 +581,7 @@ function MediaPreview({ item, compact = false }) {
     });
     try {
       await video.play();
-    } catch (error) {
-      if (allowMutedFallback && error?.name === "NotAllowedError") {
-        video.muted = true;
-        autoMutedRef.current = true;
-        setIsMuted(true);
-        try {
-          await video.play();
-          return;
-        } catch {}
-      }
+    } catch {
       setIsPlaying(false);
     }
   };
@@ -537,16 +589,20 @@ function MediaPreview({ item, compact = false }) {
     if (!videoRef.current) return;
     videoRef.current.pause();
   };
+  const resetPreview = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.pause();
+    try {
+      video.currentTime = 0;
+      setCurrentTime(0);
+    } catch {}
+  };
   const togglePlay = () => {
     if (!videoRef.current) return;
     clearTimeout(hoverTimerRef.current);
     if (!isPlaying) {
       manualPausedRef.current = false;
-      if (autoMutedRef.current) {
-        autoMutedRef.current = false;
-        videoRef.current.muted = false;
-        setIsMuted(false);
-      }
       void play();
     } else {
       manualPausedRef.current = true;
@@ -556,6 +612,7 @@ function MediaPreview({ item, compact = false }) {
   const toggleMuted = () => {
     setIsMuted((current) => {
       const next = !current;
+      userMutedRef.current = next;
       if (videoRef.current) videoRef.current.muted = next;
       return next;
     });
@@ -570,6 +627,7 @@ function MediaPreview({ item, compact = false }) {
     if (!video) return;
     if (Number.isFinite(video.duration) && video.duration > 0) setMediaDuration(video.duration);
     video.playbackRate = playbackRate;
+    if (!userMutedRef.current) video.volume = 1;
   };
   const updateTime = () => {
     if (isScrubbing || !videoRef.current) return;
@@ -594,7 +652,7 @@ function MediaPreview({ item, compact = false }) {
       onMouseLeave={() => {
         clearTimeout(hoverTimerRef.current);
         manualPausedRef.current = false;
-        pause();
+        resetPreview();
       }}
     >
       {coverSrc ? <ResilientImage src={coverSrc} alt="" onMissing={item.onMediaMissing} onLoad={item.onMediaLoaded} /> : <CoverPlaceholder item={item} />}
@@ -622,15 +680,29 @@ function MediaPreview({ item, compact = false }) {
               setVideoReady(true);
             }}
             onPause={() => setIsPlaying(false)}
-            onError={() => setIsPlaying(false)}
+            onError={() => {
+              setIsPlaying(false);
+              setMediaError(eagleSrc ? "Eagle 文件不可用/重新关联" : "视频文件不可用");
+            }}
           />
+          {mediaError && (
+            <div className="media-error-state" role="status">
+              <strong>{mediaError}</strong>
+              <small>{eagleSrc ? "请确认 Eagle 已启动且素材未被移动或删除" : "请修复素材后重试"}</small>
+            </div>
+          )}
           <div
             className="media-hover-surface"
             aria-hidden="true"
             onMouseEnter={() => {
               clearTimeout(hoverTimerRef.current);
               hoverTimerRef.current = setTimeout(() => {
-                if (!manualPausedRef.current) void play({ allowMutedFallback: true });
+                if (!manualPausedRef.current && videoRef.current) {
+                  videoRef.current.muted = userMutedRef.current;
+                  if (!userMutedRef.current) videoRef.current.volume = 1;
+                  setIsMuted(userMutedRef.current);
+                  void play();
+                }
               }, 180);
             }}
           />
@@ -686,7 +758,7 @@ function CreationChoiceModal({ item, projects, onClose, onNew, onAdd, notify }) 
       {mode === "choice" ? (
         <div className="choice-list">
           <button type="button" onClick={() => onNew(item)}><span className="choice-icon coral"><Plus size={20} /></span><div><strong>开始新的创作</strong><p>生成新的永久内容 ID，并自动关联这条灵感。</p></div><ChevronRight size={18} /></button>
-          <button type="button" onClick={() => setMode("existing")} disabled={!projects.length}><span className="choice-icon blue"><Inbox size={20} /></span><div><strong>加入已有创作</strong><p>从仍在待发布的项目中选择一个。</p></div><ChevronRight size={18} /></button>
+          <button type="button" onClick={() => setMode("existing")} disabled={!projects.length}><span className="choice-icon blue"><Inbox size={20} /></span><div><strong>加入已有创作</strong><p>从创作台中选择一个选题继续整理。</p></div><ChevronRight size={18} /></button>
         </div>
       ) : (
         <div className="existing-list">
@@ -702,25 +774,6 @@ function CreationChoiceModal({ item, projects, onClose, onNew, onAdd, notify }) 
   );
 }
 
-function PublishModal({ project, onClose, onConfirm }) {
-  const primaryCover = primaryProjectCover(project);
-  return (
-    <Modal title="确认发布" description="系统会先冻结发布快照，再等待资料库媒体匹配。" onClose={onClose}>
-      <div className="snapshot-preview">
-        <MediaPreview item={primaryCover || project} compact />
-        <div><small>{project.id}</small><strong>{project.title || "未命名创作"}</strong><p>{project.body || "尚未填写正文"}</p></div>
-      </div>
-      <div className="snapshot-facts">
-        <span><Check size={15} />标题与正文</span><span><Check size={15} />分类：{categoryLabel(project)}</span><span><Check size={15} />{projectCoverCandidates(project).length} 张封面</span><span><Check size={15} />{project.references.length} 条灵感</span>
-      </div>
-      <div className="modal-footer">
-        <button type="button" className="quiet-button" onClick={onClose}>取消</button>
-        <button type="button" className="publish-button" onClick={() => onConfirm(project)}><Check size={16} />发布并进入归档</button>
-      </div>
-    </Modal>
-  );
-}
-
 export function App() {
   const [page, setPage] = useState("inspirations");
   const [libraryLoaded, setLibraryLoaded] = useState(false);
@@ -731,10 +784,10 @@ export function App() {
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
   const [editingProjectId, setEditingProjectId] = useState(null);
+  const [editingAccountRole, setEditingAccountRole] = useState("blogger");
   const [mediaUploads, setMediaUploads] = useState({});
   const [archiveItems, setArchiveItems] = useState([]);
   const [choiceItem, setChoiceItem] = useState(null);
-  const [publishProject, setPublishProject] = useState(null);
   const [toast, setToast] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
@@ -744,6 +797,9 @@ export function App() {
   const [libraryBusy, setLibraryBusy] = useState(false);
   const [libraryRevision, setLibraryRevision] = useState(1);
   const [deletingInspirationIds, setDeletingInspirationIds] = useState(() => new Set());
+  const [deletingProjectIds, setDeletingProjectIds] = useState(() => new Set());
+  const [creatingContentIds, setCreatingContentIds] = useState(() => new Set());
+  const [movingProjectIds, setMovingProjectIds] = useState(() => new Set());
   const legacyCategoriesRef = useRef([]);
   const userCategoriesStoredRef = useRef(false);
   const lastSavedSnapshotRef = useRef("");
@@ -755,11 +811,16 @@ export function App() {
   const saveInFlightRef = useRef(null);
   const autosaveTimerRef = useRef(null);
   const deletingInspirationIdsRef = useRef(new Set());
+  const deletingProjectIdsRef = useRef(new Set());
+  const creatingContentIdsRef = useRef(new Set());
+  const movingProjectIdsRef = useRef(new Set());
+  const projectIndexMutationQueueRef = useRef(Promise.resolve());
   const inspirationItemsRef = useRef(inspirationItems);
   const pendingReferencePatchesRef = useRef(new Map());
   const referencePatchTimersRef = useRef(new Map());
   const activeProjectRef = useRef(activeProject);
   const projectsRef = useRef(projects);
+  const archiveItemsRef = useRef(archiveItems);
   const linkedInspirationIds = useMemo(() => collectReferencedInspirationIds({
     activeProject,
     projects,
@@ -767,9 +828,13 @@ export function App() {
   }), [activeProject, projects, archiveItems]);
   activeProjectRef.current = activeProject;
   projectsRef.current = projects;
+  archiveItemsRef.current = archiveItems;
   inspirationItemsRef.current = inspirationItems;
   libraryRevisionRef.current = libraryRevision;
   deletingInspirationIdsRef.current = deletingInspirationIds;
+  deletingProjectIdsRef.current = deletingProjectIds;
+  creatingContentIdsRef.current = creatingContentIds;
+  movingProjectIdsRef.current = movingProjectIds;
   const editingProject = editingProjectId
     ? projects.find((project) => project.id === editingProjectId) || null
     : null;
@@ -785,6 +850,7 @@ export function App() {
       setArchiveItems([]);
       setActiveProject(null);
       setEditingProjectId(null);
+      setEditingAccountRole("blogger");
       setMediaUploads({});
       projectRevisionRef.current = new Map();
       abandonedProjectIdsRef.current = new Set();
@@ -793,6 +859,11 @@ export function App() {
       libraryRevisionRef.current = Number(data.revision) || libraryRevisionRef.current;
       setLibraryRevision(libraryRevisionRef.current);
       setDeletingInspirationIds(new Set());
+      deletingProjectIdsRef.current = new Set();
+      setDeletingProjectIds(new Set());
+      creatingContentIdsRef.current = new Set();
+      setCreatingContentIds(new Set());
+      setMovingProjectIds(new Set());
       lastSavedSnapshotRef.current = "";
       setLibraryLoaded(true);
       setLibraryWritable(false);
@@ -824,6 +895,7 @@ export function App() {
     setArchiveItems(library.archive);
     setActiveProject(nextActiveProject);
     setEditingProjectId(null);
+    setEditingAccountRole("blogger");
     setMediaUploads({});
     projectRevisionRef.current = new Map();
     abandonedProjectIdsRef.current = new Set();
@@ -832,6 +904,11 @@ export function App() {
     libraryRevisionRef.current = library.revision;
     setLibraryRevision(library.revision);
     setDeletingInspirationIds(new Set());
+    deletingProjectIdsRef.current = new Set();
+    setDeletingProjectIds(new Set());
+    creatingContentIdsRef.current = new Set();
+    setCreatingContentIds(new Set());
+    setMovingProjectIds(new Set());
     lastSavedSnapshotRef.current = stableLibrarySnapshot(librarySavePayload({
       legacyCategories: library.legacyCategories,
       categories: library.categories,
@@ -892,7 +969,7 @@ export function App() {
 
   useEffect(() => {
     if (!libraryLoaded || !libraryWritable) return undefined;
-    if (deletingInspirationIds.size) {
+    if (deletingInspirationIds.size || deletingProjectIds.size || creatingContentIds.size || movingProjectIds.size) {
       setSaveState("saving");
       return undefined;
     }
@@ -912,7 +989,7 @@ export function App() {
     }
     setSaveState("saving");
     autosaveTimerRef.current = window.setTimeout(() => {
-      if (deletingInspirationIdsRef.current.size || saveInFlightRef.current) return;
+      if (deletingInspirationIdsRef.current.size || deletingProjectIdsRef.current.size || creatingContentIdsRef.current.size || movingProjectIdsRef.current.size || saveInFlightRef.current) return;
       const requestRevision = libraryRevisionRef.current;
       const request = fetch("/api/library", {
         method: "POST",
@@ -943,9 +1020,9 @@ export function App() {
           setSaveState("saved");
         })
         .catch((error) => {
-          if (error.status === 409 && error.data?.library) {
-            applyLibraryData(error.data.library);
-            notify("资料库内容已更新，已载入最新版本");
+          if (error.status === 409) {
+            setSaveState("error");
+            notify("检测到资料库版本冲突，当前页面内容已保留，请重试保存");
             return;
           }
           setSaveState("error");
@@ -956,7 +1033,7 @@ export function App() {
       saveInFlightRef.current = request;
     }, 360);
     return () => window.clearTimeout(autosaveTimerRef.current);
-  }, [libraryLoaded, libraryWritable, categories, inspirationItems, projects, archiveItems, activeProject, storage?.sessionId, libraryRevision, deletingInspirationIds]);
+  }, [libraryLoaded, libraryWritable, categories, inspirationItems, projects, archiveItems, activeProject, storage?.sessionId, libraryRevision, deletingInspirationIds, deletingProjectIds, creatingContentIds, movingProjectIds]);
 
   const openAuth = async (platform) => {
     notify("正在打开专用登录窗口");
@@ -1069,6 +1146,40 @@ export function App() {
     archiveItems,
     activeProject,
   });
+
+  const persistCurrentLibrary = async () => {
+    window.clearTimeout(autosaveTimerRef.current);
+    if (saveInFlightRef.current) await saveInFlightRef.current;
+    const payload = currentLibraryPayload();
+    const snapshot = stableLibrarySnapshot(payload);
+    if (snapshot === lastSavedSnapshotRef.current) return { payload, snapshot };
+    setSaveState("saving");
+    const response = await fetch("/api/library", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-library-session-id": storage?.sessionId || "",
+        "x-library-revision": String(libraryRevisionRef.current),
+      },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok || result.error) {
+      const error = new Error(result.error || "保存失败");
+      error.status = response.status;
+      error.data = result;
+      setSaveState("error");
+      throw error;
+    }
+    if (result.storage) setStorage(result.storage);
+    if (result.revision) {
+      libraryRevisionRef.current = result.revision;
+      setLibraryRevision(result.revision);
+    }
+    lastSavedSnapshotRef.current = snapshot;
+    setSaveState("saved");
+    return { payload, snapshot };
+  };
 
   const executeLibraryAction = async (action, extra = {}) => {
     if (libraryBusy) return;
@@ -1186,8 +1297,10 @@ export function App() {
         reference,
         createdAt: formatNow(),
       });
+      activeProjectRef.current = project;
       setActiveProject(project);
       setEditingProjectId(null);
+      setEditingAccountRole("blogger");
       setPage("creation");
       return project;
     } catch (error) {
@@ -1217,16 +1330,78 @@ export function App() {
     if (project) notify(`已新建 ${project.id}`);
   };
 
+  const createContentIndex = () => {
+    const project = queueProject(makeOriginalProject({ id: optimisticContentId(), createdAt: formatNow() }));
+    const nextCreatingIds = new Set(creatingContentIdsRef.current);
+    nextCreatingIds.add(project.id);
+    creatingContentIdsRef.current = nextCreatingIds;
+    setCreatingContentIds(nextCreatingIds);
+    window.clearTimeout(autosaveTimerRef.current);
+    projectsRef.current = [project, ...projectsRef.current];
+    setProjects(projectsRef.current);
+    setSaveState("saving");
+
+    const finishCreate = () => {
+      const next = new Set(creatingContentIdsRef.current);
+      next.delete(project.id);
+      creatingContentIdsRef.current = next;
+      setCreatingContentIds(next);
+    };
+    const commitCreate = async () => {
+      try {
+        const response = await fetch("/api/projects/index", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-library-session-id": storage?.sessionId || "",
+            "x-library-revision": String(libraryRevisionRef.current),
+          },
+          body: JSON.stringify({ project }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error || result.createdProject?.id !== project.id) throw new Error(result.error || "新建内容失败");
+        if (result.storage) setStorage(result.storage);
+        if (result.revision) {
+          libraryRevisionRef.current = result.revision;
+          setLibraryRevision(result.revision);
+        }
+        const savedPayload = savedLibraryPayload(lastSavedSnapshotRef.current);
+        if (savedPayload) {
+          lastSavedSnapshotRef.current = stableLibrarySnapshot({
+            ...savedPayload,
+            projects: [result.createdProject, ...(savedPayload.projects || []).filter((item) => item.id !== project.id)],
+          });
+        }
+        setSaveState("saved");
+        notify(`已新建 ${project.id}，可以直接填写内容`);
+      } catch (error) {
+        projectsRef.current = projectsRef.current.filter((item) => item.id !== project.id);
+        setProjects(projectsRef.current);
+        notify(`新建失败，已撤回内容：${error.message || "新建内容失败"}`);
+      } finally {
+        finishCreate();
+      }
+    };
+    const queued = projectIndexMutationQueueRef.current.then(commitCreate, commitCreate);
+    projectIndexMutationQueueRef.current = queued.catch(() => {});
+    return project;
+  };
+
   const addToExisting = (project, inspiration) => {
     setProjects((current) => current.map((item) => item.id === project.id && !item.references.some((ref) => ref.id === inspiration.id) ? { ...item, references: [...item.references, inspiration], modified: "刚刚" } : item));
   };
 
   const updateProjectById = (projectId, updater) => {
-    setActiveProject((current) => current?.id === projectId ? updater(current) : current);
-    setProjects((current) => current.map((project) => project.id === projectId ? updater(project) : project));
+    if (activeProjectRef.current?.id === projectId) {
+      activeProjectRef.current = updater(activeProjectRef.current);
+      setActiveProject(activeProjectRef.current);
+    }
+    projectsRef.current = projectsRef.current.map((project) => project.id === projectId ? updater(project) : project);
+    setProjects(projectsRef.current);
   };
 
   const queueActive = (projectId, navigate = true) => {
+    const wasEditing = editingProjectId === projectId;
     const project = activeProjectRef.current?.id === projectId
       ? activeProjectRef.current
       : projectsRef.current.find((item) => item.id === projectId);
@@ -1237,10 +1412,12 @@ export function App() {
       if (existingIndex < 0) return [queuedProject, ...current];
       return current.map((item, index) => index === existingIndex ? queuedProject : item);
     });
+    if (activeProjectRef.current?.id === queuedProject.id) activeProjectRef.current = null;
     setActiveProject((current) => current?.id === queuedProject.id ? null : current);
     setEditingProjectId((current) => current === queuedProject.id ? null : current);
+    if (wasEditing) setEditingAccountRole("blogger");
     if (navigate) setPage("queue");
-    notify("已保存到待发布");
+    notify(wasEditing ? "编辑已同步到创作台" : "已保存到创作台");
     return queuedProject;
   };
 
@@ -1259,10 +1436,13 @@ export function App() {
         if (existingIndex < 0) return [queuedProject, ...current];
         return current.map((item, index) => index === existingIndex ? queuedProject : item);
       });
-      setActiveProject(makeOriginalProject({ id, createdAt: formatNow() }));
+      const nextProject = makeOriginalProject({ id, createdAt: formatNow() });
+      activeProjectRef.current = nextProject;
+      setActiveProject(nextProject);
       setEditingProjectId(null);
+      setEditingAccountRole("blogger");
       setPage("creation");
-      notify("当前创作已保存到待发布，并打开了新画板");
+      notify("当前创作已保存到创作台，并打开了新画板");
     } catch (error) {
       notify(error.message);
     } finally {
@@ -1286,27 +1466,32 @@ export function App() {
     if (project) notify("当前草稿及其真实文件已彻底删除，已打开新画板");
   };
 
-  const uploadProjectCovers = async (projectId, files) => {
+  const uploadProjectCovers = async (projectId, files, accountRole = "blogger") => {
     const revision = projectRevisionRef.current.get(projectId) || 0;
-    try {
-      const uploaded = [];
-      for (const file of files) {
-        uploaded.push(await uploadProjectCoverFile({
+    let successCount = 0;
+    let failureCount = 0;
+    for (const file of files) {
+      try {
+        const cover = await uploadProjectCoverFile({
           file,
           projectId,
+          accountRole,
           sessionId: storage?.sessionId || "",
+        });
+        if (abandonedProjectIdsRef.current.has(projectId) || (projectRevisionRef.current.get(projectId) || 0) !== revision) return;
+        updateProjectById(projectId, (current) => ({
+          ...current,
+          covers: [...(current.covers || []), { ...cover, accountRole }],
+          modified: "刚刚",
         }));
+        successCount += 1;
+      } catch (error) {
+        failureCount += 1;
+        notify(`${file.name}：${error.message || "封面上传失败"}`);
       }
-      if (abandonedProjectIdsRef.current.has(projectId) || (projectRevisionRef.current.get(projectId) || 0) !== revision) return;
-      updateProjectById(projectId, (current) => ({
-        ...current,
-        covers: [...(current.covers || []), ...uploaded],
-        modified: "刚刚",
-      }));
-      notify(`已添加 ${uploaded.length} 张本地封面`);
-    } catch (error) {
-      notify(error.message || "封面上传失败");
     }
+    if (successCount) notify(`已导入 Eagle 并添加 ${successCount} 张封面`);
+    if (failureCount) notify(`${failureCount} 张封面导入失败，可单独重试`);
   };
 
   const updateUploadTask = (projectId, uploadKey, taskId, updater) => {
@@ -1404,12 +1589,15 @@ export function App() {
       item.role === role && (!mediaId || item.id === mediaId)
     ));
     const relativePath = libraryRelativePath(media);
+    const eagleItemId = String(media?.eagleItemId || "");
     const label = projectMediaSlotLabel(role, accountRole);
-    if (!project || !media || !relativePath) {
+    if (!project || !media || (!relativePath && !eagleItemId)) {
       notify(`找不到要删除的${label}`);
       return false;
     }
-    const confirmed = window.confirm(`永久删除这条${label}？\n\n文件会从当前 .library 中彻底删除，无法恢复。`);
+    const confirmed = window.confirm(eagleItemId
+      ? `确定从内容中移除这条${label}吗？\n\n只会解除软件索引，Eagle 原文件不会被删除。`
+      : `永久删除这条${label}？\n\n文件会从当前 .library 中彻底删除，无法恢复。`);
     if (!confirmed) return false;
     try {
       const result = await deleteProjectMediaFile({
@@ -1418,11 +1606,12 @@ export function App() {
         accountRole,
         mediaId: media.id || mediaId,
         relativePath,
+        eagleItemId,
         legacyAccountRole: Boolean(options.legacyAccountRole || media.legacyAccountRole),
         sessionId: storage?.sessionId || "",
       });
       if (result.library) applyLibraryData(result.library);
-      notify(`已从资料库永久删除${label}`);
+      notify(eagleItemId ? `已解除${label}的软件索引，Eagle 文件未受影响` : `已从资料库永久删除${label}`);
       return true;
     } catch (error) {
       notify(error.message || `${label}删除失败`);
@@ -1474,38 +1663,286 @@ export function App() {
     }, 450));
   };
 
-  const editProject = (project) => {
+  const editProject = (project, accountRole = "blogger") => {
     setEditingProjectId(project.id);
+    setEditingAccountRole(accountRole);
     setPage("creation");
   };
 
-  const deleteQueuedProject = async (projectId) => {
-    const original = projectsRef.current.find((project) => project.id === projectId);
-    setProjects((current) => current.filter((project) => project.id !== projectId));
+  const deleteQueuedProject = (projectId) => {
+    if (deletingProjectIdsRef.current.has(projectId)) return Promise.resolve(false);
+    const removedProject = projectsRef.current.find((project) => project.id === projectId);
+    if (!removedProject) return Promise.resolve(false);
+    const removedIndex = projectsRef.current.findIndex((project) => project.id === projectId);
+    const removedActiveProject = activeProjectRef.current?.id === projectId ? activeProjectRef.current : null;
+    const nextDeletingIds = new Set(deletingProjectIdsRef.current);
+    nextDeletingIds.add(projectId);
+    deletingProjectIdsRef.current = nextDeletingIds;
+    setDeletingProjectIds(nextDeletingIds);
+    window.clearTimeout(autosaveTimerRef.current);
+
+    projectsRef.current = projectsRef.current.filter((project) => project.id !== projectId);
+    setProjects(projectsRef.current);
+    if (removedActiveProject) {
+      activeProjectRef.current = null;
+      setActiveProject(null);
+    }
     setEditingProjectId((current) => current === projectId ? null : current);
-    const deleted = await hardDeleteContent(projectId);
-    if (!deleted && original) setProjects((current) => current.some((project) => project.id === projectId) ? current : [original, ...current]);
-    return Boolean(deleted);
+
+    const finishDelete = () => {
+      const next = new Set(deletingProjectIdsRef.current);
+      next.delete(projectId);
+      deletingProjectIdsRef.current = next;
+      setDeletingProjectIds(next);
+    };
+    const commitDelete = async () => {
+      try {
+        const localPayload = librarySavePayload({
+          legacyCategories: legacyCategoriesRef.current,
+          categories,
+          hasUserDefinedCategories: userCategoriesStoredRef.current,
+          inspirationItems: inspirationItemsRef.current,
+          projects: projectsRef.current,
+          archiveItems,
+          activeProject: activeProjectRef.current,
+        });
+        const projectPatches = dirtyProjectPatches(
+          lastSavedSnapshotRef.current,
+          localPayload.projects,
+          localPayload.activeProject,
+          projectId,
+        );
+        const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/index`, {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json",
+            "x-library-session-id": storage?.sessionId || "",
+            "x-library-revision": String(libraryRevisionRef.current),
+          },
+          body: JSON.stringify({ projectPatches }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error) throw new Error(result.error || "删除索引失败");
+        const reconciledById = new Map((result.reconciledProjects || []).map((project) => [project.id, project]));
+        projectsRef.current = projectsRef.current.map((project) => reconciledById.get(project.id) || project);
+        setProjects(projectsRef.current);
+        if (activeProjectRef.current) {
+          activeProjectRef.current = reconciledById.get(activeProjectRef.current.id) || activeProjectRef.current;
+          setActiveProject(activeProjectRef.current);
+        }
+        if (result.storage) setStorage(result.storage);
+        if (result.revision) {
+          libraryRevisionRef.current = result.revision;
+          setLibraryRevision(result.revision);
+        }
+        const savedPayload = savedLibraryPayload(lastSavedSnapshotRef.current);
+        if (savedPayload) {
+          lastSavedSnapshotRef.current = stableLibrarySnapshot({
+            ...savedPayload,
+            projects: (savedPayload.projects || [])
+              .filter((project) => project.id !== projectId)
+              .map((project) => reconciledById.get(project.id) || project),
+            activeProject: reconciledById.get(savedPayload.activeProject?.id) || activeProjectRef.current,
+          });
+        }
+        setSaveState("saved");
+        notify("已删除软件索引，Eagle 文件未受影响");
+        return true;
+      } catch (error) {
+        projectsRef.current = [...projectsRef.current];
+        projectsRef.current.splice(Math.min(removedIndex, projectsRef.current.length), 0, removedProject);
+        setProjects(projectsRef.current);
+        if (removedActiveProject) {
+          activeProjectRef.current = removedActiveProject;
+          setActiveProject(removedActiveProject);
+        }
+        notify(`删除失败，已恢复内容：${error.message || "删除索引失败"}`);
+        return false;
+      } finally {
+        finishDelete();
+      }
+    };
+    const queued = projectIndexMutationQueueRef.current.then(commitDelete, commitDelete);
+    projectIndexMutationQueueRef.current = queued.catch(() => {});
+    return queued;
   };
 
-  const publish = (project) => {
-    const snapshot = createArchiveSnapshot(project, compactTime());
-    setProjects((current) => current.filter((item) => item.id !== project.id));
-    setActiveProject((current) => current?.id === project.id ? null : current);
-    setEditingProjectId((current) => current === project.id ? null : current);
-    setArchiveItems((current) => [snapshot, ...current.filter((item) => item.id !== project.id)]);
-    setPublishProject(null);
-    setPage("archive");
-    notify("发布快照已冻结并进入归档");
+  const moveProjectToState = (projectId, destination) => {
+    const sourceIsArchive = destination === "projects";
+    const source = sourceIsArchive ? archiveItemsRef.current : projectsRef.current;
+    const project = source.find((item) => item.id === projectId);
+    if (!project || movingProjectIdsRef.current.has(projectId)) return Promise.resolve(false);
+    const sourceIndex = source.findIndex((item) => item.id === projectId);
+    const nextMoving = new Set(movingProjectIdsRef.current);
+    nextMoving.add(projectId);
+    movingProjectIdsRef.current = nextMoving;
+    setMovingProjectIds(nextMoving);
+    window.clearTimeout(autosaveTimerRef.current);
+
+    const primaryCopy = projectPrimaryCopy(project);
+    const movedProject = destination === "archive"
+      ? {
+          ...project,
+          ...primaryCopy,
+          creationStatus: "completed",
+          completedAt: project.completedAt || new Date().toISOString(),
+          workflow: { ...(project.workflow || {}), stage: "archived", creationStatus: "completed", completedAt: project.completedAt || new Date().toISOString() },
+        }
+      : {
+          ...project,
+          creationStatus: "in_progress",
+          completedAt: null,
+          workflow: { ...(project.workflow || {}), stage: "creating", creationStatus: "in_progress", completedAt: null },
+        };
+    if (destination === "archive") {
+      projectsRef.current = projectsRef.current.filter((item) => item.id !== projectId);
+      archiveItemsRef.current = [movedProject, ...archiveItemsRef.current.filter((item) => item.id !== projectId)];
+    } else {
+      archiveItemsRef.current = archiveItemsRef.current.filter((item) => item.id !== projectId);
+      projectsRef.current = [movedProject, ...projectsRef.current.filter((item) => item.id !== projectId)];
+    }
+    setProjects(projectsRef.current);
+    setArchiveItems(archiveItemsRef.current);
+
+    const finish = () => {
+      const next = new Set(movingProjectIdsRef.current);
+      next.delete(projectId);
+      movingProjectIdsRef.current = next;
+      setMovingProjectIds(next);
+    };
+    const commit = async () => {
+      try {
+        const endpoint = destination === "archive" ? "archive" : "restore";
+        const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/${endpoint}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-library-session-id": storage?.sessionId || "",
+            "x-library-revision": String(libraryRevisionRef.current),
+          },
+          body: JSON.stringify({ project: movedProject }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error || (!result.project && !result.alreadyMoved)) throw new Error(result.error || "更新内容状态失败");
+        const committed = result.project || movedProject;
+        if (destination === "archive") {
+          archiveItemsRef.current = archiveItemsRef.current.map((item) => item.id === projectId ? committed : item);
+          setArchiveItems(archiveItemsRef.current);
+        } else {
+          projectsRef.current = projectsRef.current.map((item) => item.id === projectId ? committed : item);
+          setProjects(projectsRef.current);
+        }
+        if (result.storage) setStorage(result.storage);
+        if (result.revision) {
+          libraryRevisionRef.current = result.revision;
+          setLibraryRevision(result.revision);
+        }
+        const savedPayload = savedLibraryPayload(lastSavedSnapshotRef.current);
+        if (savedPayload) {
+          lastSavedSnapshotRef.current = stableLibrarySnapshot({
+            ...savedPayload,
+            projects: projectsRef.current,
+            archive: archiveItemsRef.current,
+          });
+        }
+        setSaveState("saved");
+        notify(destination === "archive" ? "已完成，内容已移入归档库" : "已恢复到创作台");
+        return true;
+      } catch (error) {
+        if (sourceIsArchive) {
+          projectsRef.current = projectsRef.current.filter((item) => item.id !== projectId);
+          archiveItemsRef.current = [...archiveItemsRef.current];
+          archiveItemsRef.current.splice(Math.min(sourceIndex, archiveItemsRef.current.length), 0, project);
+        } else {
+          archiveItemsRef.current = archiveItemsRef.current.filter((item) => item.id !== projectId);
+          projectsRef.current = [...projectsRef.current];
+          projectsRef.current.splice(Math.min(sourceIndex, projectsRef.current.length), 0, project);
+        }
+        setProjects(projectsRef.current);
+        setArchiveItems(archiveItemsRef.current);
+        notify(`状态更新失败，已恢复原内容：${error.message || "请重试"}`);
+        return false;
+      } finally {
+        finish();
+      }
+    };
+    const queued = projectIndexMutationQueueRef.current.then(commit, commit);
+    projectIndexMutationQueueRef.current = queued.catch(() => {});
+    return queued;
+  };
+
+  const deleteArchivedProject = (projectId) => {
+    if (deletingProjectIdsRef.current.has(projectId)) return Promise.resolve(false);
+    const project = archiveItemsRef.current.find((item) => item.id === projectId);
+    if (!project) return Promise.resolve(false);
+    const index = archiveItemsRef.current.findIndex((item) => item.id === projectId);
+    const nextDeleting = new Set(deletingProjectIdsRef.current);
+    nextDeleting.add(projectId);
+    deletingProjectIdsRef.current = nextDeleting;
+    setDeletingProjectIds(nextDeleting);
+    archiveItemsRef.current = archiveItemsRef.current.filter((item) => item.id !== projectId);
+    setArchiveItems(archiveItemsRef.current);
+    const finish = () => {
+      const next = new Set(deletingProjectIdsRef.current);
+      next.delete(projectId);
+      deletingProjectIdsRef.current = next;
+      setDeletingProjectIds(next);
+    };
+    const commit = async () => {
+      try {
+        const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/index`, {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json",
+            "x-library-session-id": storage?.sessionId || "",
+            "x-library-revision": String(libraryRevisionRef.current),
+          },
+          body: JSON.stringify({ projectPatches: [] }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error) throw new Error(result.error || "删除索引失败");
+        if (result.storage) setStorage(result.storage);
+        if (result.revision) {
+          libraryRevisionRef.current = result.revision;
+          setLibraryRevision(result.revision);
+        }
+        const savedPayload = savedLibraryPayload(lastSavedSnapshotRef.current);
+        if (savedPayload) lastSavedSnapshotRef.current = stableLibrarySnapshot({ ...savedPayload, archive: archiveItemsRef.current });
+        setSaveState("saved");
+        notify("已删除软件索引，Eagle 文件未受影响");
+        return true;
+      } catch (error) {
+        archiveItemsRef.current = [...archiveItemsRef.current];
+        archiveItemsRef.current.splice(Math.min(index, archiveItemsRef.current.length), 0, project);
+        setArchiveItems(archiveItemsRef.current);
+        notify(`删除失败，已恢复内容：${error.message || "删除索引失败"}`);
+        return false;
+      } finally {
+        finish();
+      }
+    };
+    const queued = projectIndexMutationQueueRef.current.then(commit, commit);
+    projectIndexMutationQueueRef.current = queued.catch(() => {});
+    return queued;
   };
 
   let main;
-  if (libraryLoaded && !storage) {
+  if (!libraryLoaded) {
+    main = (
+      <div className="empty-state" role="status" aria-live="polite">
+        <div className="empty-icon"><FolderOpen size={20} /></div>
+        <h2>正在打开资料库</h2>
+      </div>
+    );
+  } else if (!storage) {
     main = <ClosedLibraryWorkspace busy={libraryBusy} onAction={requestLibraryAction} />;
   } else if (page === "creation") {
     main = (
       <CreationPage
         activeProject={creationProject}
+        accountRole={editingAccountRole}
+        editingExisting={Boolean(editingProject)}
+        onAccountRoleChange={setEditingAccountRole}
         inspirationItems={inspirationItems}
         categories={categories}
         notify={notify}
@@ -1523,6 +1960,7 @@ export function App() {
             onBodyChange={handlers.onBodyChange}
             onDetach={handlers.onDetach}
             notify={notify}
+            sessionId={storage?.sessionId || ""}
             categoryValue={categoryValue}
             renderMediaPreview={(media) => <MediaPreview item={media} />}
             key={item.id}
@@ -1547,10 +1985,11 @@ export function App() {
         categories={categories}
         mediaUploads={mediaUploads}
         notify={notify}
+        onCreateContent={createContentIndex}
         onEdit={editProject}
         onDeleteProject={deleteQueuedProject}
+        onCompleteProject={(projectId) => moveProjectToState(projectId, "archive")}
         onUpdateProject={updateProjectById}
-        onPublish={setPublishProject}
         onUploadCovers={uploadProjectCovers}
         onUploadMedia={uploadProjectMedia}
         onRemoveMedia={removeProjectMedia}
@@ -1568,6 +2007,8 @@ export function App() {
         openCategoryManager={() => setCategoryManagerOpen(true)}
         notify={notify}
         onRevealTarget={revealProjectAsset}
+        onRestoreProject={(projectId) => moveProjectToState(projectId, "projects")}
+        onDeleteProject={deleteArchivedProject}
         setSidebarOpen={setSidebarOpen}
         storage={storage}
       />
@@ -1601,16 +2042,15 @@ export function App() {
 
   const categoryCounts = Object.fromEntries(categories.map((category) => [
     category,
-    inspirationItems.filter((item) => categoryValue(item) === category).length + projects.filter((item) => categoryValue(item) === category).length + archiveItems.filter((item) => categoryValue(item) === category).length,
+    inspirationItems.filter((item) => categoryValue(item) === category).length + projects.filter((item) => categoryValue(item) === category).length,
   ]));
 
   return (
     <div className="app-frame">
-      <AppSidebar page={page} setPage={setPage} queueCount={projects.length} archivedCount={archiveItems.length} open={sidebarOpen} setOpen={setSidebarOpen} storage={storage} saveState={saveState} libraryBusy={libraryBusy} onLibraryAction={requestLibraryAction} />
+      <AppSidebar page={page} setPage={setPage} queueCount={projects.length} archiveCount={archiveItems.length} open={sidebarOpen} setOpen={setSidebarOpen} storage={storage} saveState={saveState} libraryBusy={libraryBusy} onLibraryAction={requestLibraryAction} />
       {sidebarOpen && <button type="button" className="sidebar-scrim" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} />}
       <div className="app-content">{main}</div>
       {choiceItem && <CreationChoiceModal item={choiceItem} projects={projects} onClose={() => setChoiceItem(null)} onNew={createNew} onAdd={addToExisting} notify={notify} />}
-      {publishProject && <PublishModal project={publishProject} onClose={() => setPublishProject(null)} onConfirm={publish} />}
       {categoryManagerOpen && <CategoryManagerModal categories={categories} counts={categoryCounts} onAdd={(category) => {
         userCategoriesStoredRef.current = true;
         setCategories((current) => [...current, category]);

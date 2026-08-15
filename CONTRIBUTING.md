@@ -32,7 +32,7 @@ npm run build
 
 ```bash
 npm run desktop:pack
-codesign --verify --deep --strict 'release/mac-arm64/视频内容创作中台.app'
+codesign --verify --deep --strict 'release/mac-arm64/Video Hub.app'
 ```
 
 实际输出目录会随架构变化。

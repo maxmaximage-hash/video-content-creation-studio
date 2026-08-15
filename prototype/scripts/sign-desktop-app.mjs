@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const appPath = path.join(root, "release", "mac-arm64", "视频内容创作中台.app");
+const outputDir = path.join(root, "release", "mac-arm64");
+const appEntries = await fs.readdir(outputDir, { withFileTypes: true });
+const appEntry = appEntries.find((entry) => entry.isDirectory() && entry.name.endsWith(".app"));
+if (!appEntry) throw new Error("没有找到桌面应用产物");
+const appPath = path.join(outputDir, appEntry.name);
 
 await execFileAsync("codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", appPath]);
 await execFileAsync("codesign", ["--verify", "--deep", "--strict", appPath]);

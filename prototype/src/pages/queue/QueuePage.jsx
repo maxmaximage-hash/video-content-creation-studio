@@ -17,9 +17,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  Check,
+  CheckCircle2,
   Copy,
-  FileVideo2,
   FolderOpen,
   GripVertical,
   ImagePlus,
@@ -30,17 +29,24 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  Undo2,
   Upload,
   Video,
+  WandSparkles,
   X,
 } from "lucide-react";
 import {
+  CONTENT_ACCOUNT_VARIANTS,
+  projectAccountCopy,
+  projectAccountCovers,
+  updateProjectAccountCopy,
+} from "./content-variants.js";
+import { formatBodyText } from "./body-format.js";
+import {
   coverSource,
-  isCreationComplete,
   PROJECT_MEDIA_SLOTS,
   projectCoverCandidates,
   projectFinishedVideos,
-  projectMaterialCount,
   projectMediaSlotKey,
   projectMediaSlotProjection,
   projectOriginalMediaItems,
@@ -51,6 +57,7 @@ import {
   libraryRelativePath,
   startNativeFileDrag,
 } from "../../services/project-media.js";
+import { eagleMediaSource } from "../../services/eagle-media.js";
 import "./queue.css";
 
 const VIDEO_ACCEPT = "video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm";
@@ -71,7 +78,7 @@ function QueueIconButton({ label, children, className = "", onClick, disabled = 
   );
 }
 
-function QueueHeader({ completedCount, setSidebarOpen }) {
+function QueueHeader({ creatingContent, onCreateContent, setSidebarOpen }) {
   return (
     <header className="page-header">
       <div className="title-row">
@@ -79,13 +86,53 @@ function QueueHeader({ completedCount, setSidebarOpen }) {
           <Menu size={20} />
         </QueueIconButton>
         <div>
-          <span className="eyebrow">03 / 发布准备</span>
-          <h1>待发布</h1>
-          <p>草稿、创作中和已完成内容都在这里交接，序号只代表当前优先级。</p>
+          <span className="eyebrow">03 / 正在创作</span>
+          <h1>创作台</h1>
+          <p>一个选题同时维护博主号与 IP 号两版内容，完成后会进入归档库。</p>
         </div>
       </div>
-      <div className="header-actions"><span className="status-pill tone-green">{completedCount} 个创作已完成</span></div>
+      <div className="header-actions queue-header-actions">
+        <button type="button" className="primary-button queue-create-button" onClick={onCreateContent} disabled={creatingContent}>
+          {creatingContent ? <RefreshCw size={16} className="spin" /> : <Plus size={16} />}
+          {creatingContent ? "正在新建" : "新建内容"}
+        </button>
+      </div>
     </header>
+  );
+}
+
+function BodyFormatPreviewModal({ preview, onClose, onConfirm }) {
+  if (!preview) return null;
+  const changed = preview.original !== preview.formatted;
+  return (
+    <div className="queue-cover-lightbox" role="presentation" onMouseDown={onClose}>
+      <section className="queue-format-modal" role="dialog" aria-modal="true" aria-label="格式规整预览" onMouseDown={(event) => event.stopPropagation()}>
+        <header>
+          <div><span>{changed ? "仅清理格式，正文内容不变" : "检查完成"}</span><h2>{preview.accountLabel}正文格式规整</h2></div>
+          <QueueIconButton label="关闭格式规整预览" onClick={onClose}><X size={18} /></QueueIconButton>
+        </header>
+        {changed ? (
+          <div className="queue-format-compare">
+            <label><span>原文</span><textarea value={preview.original} readOnly /></label>
+            <label><span>规整后</span><textarea value={preview.formatted} readOnly /></label>
+          </div>
+        ) : (
+          <div className="queue-format-unchanged" role="status">
+            <CheckCircle2 size={24} />
+            <strong>当前正文无需调整</strong>
+            <span>没有检测到需要清理的格式。</span>
+          </div>
+        )}
+        <footer>
+          {changed ? (
+            <>
+              <button type="button" className="quiet-button" onClick={onClose}>取消</button>
+              <button type="button" className="primary-button" onClick={onConfirm}><WandSparkles size={15} />确认规整</button>
+            </>
+          ) : <button type="button" className="primary-button" onClick={onClose}>关闭</button>}
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -102,14 +149,26 @@ function QueueCopyButton({ value, notify }) {
   return <QueueIconButton label="复制" onClick={copy} disabled={!value}><Copy size={15} /></QueueIconButton>;
 }
 
-function QueueTitleEditor({ value, onChange }) {
+function QueueTitleEditor({ value, onChange, ariaLabel = "内容标题", placeholder = "输入标题" }) {
   const inputRef = useRef(null);
 
   useEffect(() => {
     const input = inputRef.current;
     if (!input) return;
-    input.style.height = "auto";
-    input.style.height = `${input.scrollHeight}px`;
+    const fitHeight = () => {
+      input.style.height = "auto";
+      input.style.height = `${input.scrollHeight}px`;
+    };
+    let lastWidth = input.getBoundingClientRect().width;
+    fitHeight();
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry?.contentRect.width || 0;
+      if (Math.abs(width - lastWidth) < 1) return;
+      lastWidth = width;
+      fitHeight();
+    });
+    observer.observe(input);
+    return () => observer.disconnect();
   }, [value]);
 
   return (
@@ -118,8 +177,8 @@ function QueueTitleEditor({ value, onChange }) {
       className="queue-title-editor"
       rows={1}
       value={value}
-      placeholder="输入视频标题"
-      aria-label="待发布标题"
+      placeholder={placeholder}
+      aria-label={ariaLabel}
       onChange={(event) => onChange(event.target.value)}
     />
   );
@@ -127,17 +186,22 @@ function QueueTitleEditor({ value, onChange }) {
 
 function QueueImage({ src, alt = "", ...props }) {
   const [retryCount, setRetryCount] = useState(0);
+  const [unavailable, setUnavailable] = useState(false);
   const timerRef = useRef(null);
   const localAsset = String(src || "").startsWith("/library-assets/");
   const retrySrc = retryCount && localAsset ? `${src}${src.includes("?") ? "&" : "?"}assetRetry=${retryCount}` : src;
 
   useEffect(() => {
     setRetryCount(0);
+    setUnavailable(false);
     return () => clearTimeout(timerRef.current);
   }, [src]);
 
   const retry = () => {
-    if (!localAsset || retryCount >= 6) return;
+    if (!localAsset || retryCount >= 2) {
+      setUnavailable(true);
+      return;
+    }
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(
       () => setRetryCount((current) => current + 1),
@@ -145,6 +209,9 @@ function QueueImage({ src, alt = "", ...props }) {
     );
   };
 
+  if (!src || unavailable) {
+    return <span className="queue-image-placeholder" role="img" aria-label="封面不可用"><ImagePlus size={22} /></span>;
+  }
   return <img {...props} src={retrySrc} alt={alt} draggable={false} onError={retry} />;
 }
 
@@ -183,6 +250,7 @@ function stateLabel(state) {
 function stateForAsset(asset, states, key) {
   const relativePath = libraryRelativePath(asset);
   if (!asset) return "not_added";
+  if (asset.eagleItemId) return states[key]?.state || "offline";
   if (!relativePath) return asset.src ? "available" : "not_added";
   return states[key]?.state || "offline";
 }
@@ -203,13 +271,14 @@ function QueueCoverItem({
   onRemove,
 }) {
   const relativePath = libraryRelativePath(cover);
-  const nativeDraggable = state === "available" && canStartNativeFileDrag(cover);
+  const displayState = state === "missing" && !cover.eagleItemId ? "not_added" : state;
+  const nativeDraggable = displayState === "available" && canStartNativeFileDrag(cover);
   const menuTarget = {
     projectId,
     relativePath,
     scope: "cover",
     label: `封面 ${index + 1}`,
-    state,
+    state: displayState,
   };
 
   return (
@@ -260,13 +329,16 @@ function QueueCoverItem({
       >
         <X size={16} strokeWidth={2.2} />
       </button>
-      {state !== "available" && <span className={`queue-asset-state state-${state}`}>{stateLabel(state)}</span>}
+      {displayState !== "available" && displayState !== "not_added" && <span className={`queue-asset-state state-${displayState}`}>{stateLabel(displayState)}</span>}
     </figure>
   );
 }
 
 function CoverStack({
   project,
+  accountRole,
+  accountLabel,
+  coverItems,
   expanded,
   states,
   sessionId,
@@ -280,7 +352,7 @@ function CoverStack({
 }) {
   const [fileDragActive, setFileDragActive] = useState(false);
   const dropDepthRef = useRef(0);
-  const covers = projectCoverCandidates(project).map((item, index) => ({
+  const covers = (coverItems || projectCoverCandidates(project)).map((item, index) => ({
     ...item,
     id: item.id || `${project.id}-${index}`,
     src: coverSource(item),
@@ -289,9 +361,11 @@ function CoverStack({
   return (
     <div
       className={`queue-cover-gallery ${expanded ? "queue-cover-gallery-expanded" : ""} ${fileDragActive ? "is-file-dragging" : ""}`}
-      data-testid={`${expanded ? "expanded" : "collapsed"}-covers-${project.id}`}
+      data-testid={accountRole === "blogger"
+        ? `${expanded ? "expanded" : "collapsed"}-covers-${project.id}`
+        : `${expanded ? "expanded" : "collapsed"}-covers-${project.id}-${accountRole}`}
       data-cover-count={covers.length}
-      aria-label="待发布封面图片区域"
+      aria-label={`${accountLabel}封面图片区域`}
       onDragEnter={(event) => {
         if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return;
         event.preventDefault();
@@ -326,6 +400,12 @@ function CoverStack({
           if (event.target === event.currentTarget) onToggle();
         }}
       >
+        {!expanded && !covers.length && (
+          <button type="button" className="queue-cover-empty" onClick={onAdd} disabled={uploading}>
+            {uploading ? <RefreshCw size={20} className="spin" /> : <ImagePlus size={22} />}
+            <span>添加封面</span>
+          </button>
+        )}
         {(expanded ? covers : covers.slice(0, 3)).map((cover, index) => (
           <QueueCoverItem
             cover={cover}
@@ -346,9 +426,11 @@ function CoverStack({
           </button>
         )}
       </div>
-      <div className="queue-cover-gallery-header" data-no-sort>
-        <span>{covers.length} 张封面</span>
-      </div>
+      {covers.length > 0 && (
+        <div className="queue-cover-gallery-header" data-no-sort>
+          <span>{covers.length} 张封面</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -356,6 +438,7 @@ function CoverStack({
 function QueueMediaCard({
   projectId,
   label,
+  displayLabel = label,
   media,
   scope,
   state,
@@ -376,6 +459,7 @@ function QueueMediaCard({
   const [aspectRatio, setAspectRatio] = useState(16 / 9);
   const [fileDragActive, setFileDragActive] = useState(false);
   const relativePath = libraryRelativePath(media);
+  const mediaSrc = media?.src || eagleMediaSource(media);
   const available = state === "available";
   const nativeDraggable = available && canStartNativeFileDrag(media);
   const menuTarget = { projectId, relativePath, scope, label, state };
@@ -467,7 +551,7 @@ function QueueMediaCard({
         onDrop={handleFileDrop}
       >
         {scope === "source_video" ? <Video size={20} /> : <Upload size={20} />}
-        <strong>{label}</strong>
+        <strong>{displayLabel}</strong>
         <small>{uploading ? `上传中 ${progress}%` : fileDragActive ? "松手上传" : "点击或拖入视频"}</small>
         {fileDragActive && <span className="queue-media-drop-hint">松手添加视频</span>}
         {uploading && <span className="queue-upload-progress"><i style={{ width: `${progress}%` }} /></span>}
@@ -516,10 +600,10 @@ function QueueMediaCard({
       }}
     >
       <div className="queue-media-viewport">
-        {available && media.src ? (
+        {available && mediaSrc ? (
           <video
             ref={videoRef}
-            src={media.src}
+            src={mediaSrc}
             preload="metadata"
             playsInline
             onLoadedMetadata={(event) => {
@@ -557,7 +641,7 @@ function QueueMediaCard({
       </button>
       {fileDragActive && <span className="queue-media-drop-hint">松手添加视频</span>}
       <div className="queue-media-info">
-        <strong>{label}</strong>
+        <strong>{displayLabel}</strong>
         <small title={media.name}>{media.name || "未命名视频"}</small>
         <span>{legacy ? "账号未标注" : stateLabel(state)}</span>
       </div>
@@ -571,18 +655,148 @@ function QueueMediaCard({
   );
 }
 
+function AccountContentColumn({
+  project,
+  accountRole,
+  accountLabel,
+  expanded,
+  onToggle,
+  states,
+  sessionId,
+  mediaProjection,
+  uploads,
+  notify,
+  onUpdateProject,
+  onAddCover,
+  onDropCovers,
+  onRemoveCover,
+  onPreviewCover,
+  onChooseMedia,
+  onDropMedia,
+  onRemoveMedia,
+  onOpenMenu,
+  uploadingCover,
+  onFormatBody,
+  onUndoBodyFormat,
+  canUndoBodyFormat,
+  onEdit,
+}) {
+  const copy = projectAccountCopy(project, accountRole);
+  const covers = projectAccountCovers(project, accountRole, projectCoverCandidates(project));
+  const slots = mediaProjection.slots.filter((slot) => slot.accountRole === accountRole);
+  const updateCopy = (field, value) => onUpdateProject(project.id, (current) => (
+    updateProjectAccountCopy(current, accountRole, { [field]: value })
+  ));
+
+  return (
+    <section className={`queue-account-column ${expanded ? "is-expanded" : ""}`} data-account-role={accountRole}>
+      <div className="queue-account-title-row">
+        <span className="queue-account-badge">{accountLabel}</span>
+        <QueueTitleEditor
+          value={copy.title}
+          ariaLabel={`${accountLabel}标题`}
+          placeholder={`${accountLabel}标题`}
+          onChange={(value) => updateCopy("title", value)}
+        />
+        <QueueCopyButton value={copy.title} notify={notify} />
+      </div>
+      <div className="queue-account-body-row">
+        <textarea
+          className="queue-body-editor"
+          value={copy.body}
+          placeholder={`${accountLabel}正文`}
+          aria-label={`${accountLabel}正文`}
+          onChange={(event) => updateCopy("body", event.target.value)}
+        />
+        <div className="queue-account-body-actions">
+          <QueueIconButton
+            label={`编辑${accountLabel}内容`}
+            className="queue-edit-account-button"
+            onClick={() => onEdit(project, accountRole)}
+          >
+            <PencilLine size={16} />
+          </QueueIconButton>
+          <button
+            type="button"
+            className="queue-format-body-button"
+            aria-label={`规整${accountLabel}正文格式`}
+            title="格式规整"
+            onClick={() => onFormatBody(project, accountRole, copy.body)}
+            disabled={!copy.body}
+          >
+            <WandSparkles size={16} />
+          </button>
+          {canUndoBodyFormat && (
+            <QueueIconButton label={`撤销${accountLabel}正文格式规整`} onClick={() => onUndoBodyFormat(project, accountRole)}>
+              <Undo2 size={15} />
+            </QueueIconButton>
+          )}
+          <QueueCopyButton value={copy.body} notify={notify} />
+        </div>
+      </div>
+      <div className="queue-account-assets">
+        <CoverStack
+          project={project}
+          accountRole={accountRole}
+          accountLabel={accountLabel}
+          coverItems={covers}
+          expanded={expanded}
+          states={states}
+          sessionId={sessionId}
+          onToggle={onToggle}
+          onAdd={() => onAddCover(accountRole)}
+          onPreview={onPreviewCover}
+          onOpenMenu={onOpenMenu}
+          onRemove={onRemoveCover}
+          onDrop={(files) => onDropCovers(accountRole, files)}
+          uploading={uploadingCover}
+        />
+        <div className="queue-account-media" aria-label={`${accountLabel}视频素材`}>
+          {slots.map((slot) => {
+            const upload = uploads[projectMediaSlotKey(slot.role, slot.accountRole)];
+            const displayLabel = slot.role === "source_video" ? "原素材" : "成品";
+            return (
+              <QueueMediaCard
+                projectId={project.id}
+                label={slot.label}
+                displayLabel={displayLabel}
+                media={slot.asset}
+                legacy={slot.legacy}
+                scope={slot.role}
+                state={slot.asset ? stateForAsset(slot.asset, states, `media:${slot.asset.id}`) : "not_added"}
+                sessionId={sessionId}
+                onOpenMenu={onOpenMenu}
+                onChoose={() => onChooseMedia(slot.role, slot.accountRole)}
+                onDropFiles={(files) => onDropMedia(slot.role, slot.accountRole, files)}
+                onRemove={() => onRemoveMedia(
+                  project.id,
+                  slot.role,
+                  slot.accountRole,
+                  slot.asset?.id || "",
+                  { legacyAccountRole: slot.legacy },
+                )}
+                uploading={Boolean(upload)}
+                progress={upload?.progress || 0}
+                key={slot.key}
+              />
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function QueueCardContent({
   project,
   index,
-  expanded,
-  onToggle,
+  expandedAccount,
+  onToggleAccount,
   categories,
   states,
   sessionId,
   mediaUploads,
   notify,
-  onEdit,
-  onPublish,
   onDelete,
   onUpdateProject,
   onAddCover,
@@ -594,26 +808,23 @@ function QueueCardContent({
   onRemoveMedia,
   onOpenMenu,
   uploadingCover,
+  onComplete,
+  onFormatBody,
+  onUndoBodyFormat,
+  formattedBodyUndo,
+  onEdit,
 }) {
-  const completed = isCreationComplete(project);
   const mediaProjection = projectMediaSlotProjection(project);
   const uploads = mediaUploads[project.id] || {};
   const categoryOptions = project.category && !categories.includes(project.category)
     ? [project.category, ...categories]
     : categories;
-  const updateField = (field, value) => onUpdateProject(project.id, (current) => ({
-    ...current,
-    [field]: value,
-    modified: "刚刚",
-  }));
   return (
-    <>
-      <div className="priority-block" aria-label={`当前顺序 ${index + 1}`}>
-        <strong>{String(index + 1).padStart(2, "0")}</strong>
-      </div>
-      <div className="queue-card-main">
-        <div className="queue-card-topbar">
-          <span className="queue-status-text">{completed ? "创作已完成" : "正在创作"}</span>
+    <div className="queue-card-main">
+      <header className="queue-card-header">
+        <strong className="queue-card-number" aria-label={`当前顺序 ${index + 1}`}>{String(index + 1).padStart(2, "0")}</strong>
+        <div className="queue-card-meta">
+          <span>正在创作</span>
           <label className="queue-category-control">
             <span>分类</span>
             <select value={project.category || ""} onChange={(event) => onUpdateProject(project.id, (current) => ({
@@ -627,97 +838,67 @@ function QueueCardContent({
             </select>
           </label>
         </div>
-        <div className="queue-card-content">
-          <CoverStack
+        <div className="queue-card-actions">
+          <button type="button" className="queue-complete-button" onClick={() => onComplete(project)}><CheckCircle2 size={16} />完成</button>
+          <button type="button" className="delete-queue-button" onClick={() => onDelete(project)}><Trash2 size={16} />删除</button>
+        </div>
+      </header>
+      <div className="queue-account-grid">
+        {CONTENT_ACCOUNT_VARIANTS.map((variant) => (
+          <AccountContentColumn
+            key={variant.id}
             project={project}
-            expanded={expanded}
+            accountRole={variant.id}
+            accountLabel={variant.label}
+            expanded={expandedAccount === variant.id}
+            onToggle={() => onToggleAccount(variant.id)}
             states={states}
             sessionId={sessionId}
-            onToggle={onToggle}
-            onAdd={onAddCover}
-            onPreview={onPreviewCover}
+            mediaProjection={mediaProjection}
+            uploads={uploads}
+            notify={notify}
+            onUpdateProject={onUpdateProject}
+            onAddCover={onAddCover}
+            onDropCovers={onDropCovers}
+            onRemoveCover={onRemoveCover}
+            onPreviewCover={onPreviewCover}
+            onChooseMedia={onChooseMedia}
+            onDropMedia={onDropMedia}
+            onRemoveMedia={onRemoveMedia}
             onOpenMenu={onOpenMenu}
-            onRemove={onRemoveCover}
-            onDrop={onDropCovers}
-            uploading={uploadingCover}
+            uploadingCover={uploadingCover}
+            onFormatBody={onFormatBody}
+            onUndoBodyFormat={onUndoBodyFormat}
+            canUndoBodyFormat={Boolean(formattedBodyUndo[`${project.id}:${variant.id}`])}
+            onEdit={onEdit}
           />
-          <div className="queue-copy">
-            <div className="queue-text-field queue-title">
-              <QueueTitleEditor value={project.title || ""} onChange={(value) => updateField("title", value)} />
-              <QueueCopyButton value={project.title} notify={notify} />
-            </div>
-            <div className="queue-text-field queue-summary">
-              <textarea
-                className="queue-body-editor"
-                value={project.body || ""}
-                placeholder="输入视频正文、口播文案或发布说明"
-                aria-label="待发布正文"
-                onChange={(event) => updateField("body", event.target.value)}
-              />
-              <QueueCopyButton value={project.body} notify={notify} />
-            </div>
-            <div className="queue-media-grid" aria-label="项目视频素材">
-              {mediaProjection.slots.map((slot) => {
-                const upload = uploads[projectMediaSlotKey(slot.role, slot.accountRole)];
-                return (
-                  <QueueMediaCard
-                    projectId={project.id}
-                    label={slot.label}
-                    media={slot.asset}
-                    legacy={slot.legacy}
-                    scope={slot.role}
-                    state={slot.asset ? stateForAsset(slot.asset, states, `media:${slot.asset.id}`) : "not_added"}
-                    sessionId={sessionId}
-                    onOpenMenu={onOpenMenu}
-                    onChoose={() => onChooseMedia(slot.role, slot.accountRole)}
-                    onDropFiles={(files) => onDropMedia(slot.role, slot.accountRole, files)}
-                    onRemove={() => onRemoveMedia(
-                      project.id,
-                      slot.role,
-                      slot.accountRole,
-                      slot.asset?.id || "",
-                      { legacyAccountRole: slot.legacy },
-                    )}
-                    uploading={Boolean(upload)}
-                    progress={upload?.progress || 0}
-                    key={slot.key}
-                  />
-                );
-              })}
-            </div>
-            {mediaProjection.legacyOverflow.length > 0 && (
-              <div className="queue-media-legacy-grid" aria-label="历史未归位视频">
-                {mediaProjection.legacyOverflow.map((media, mediaIndex) => (
-                  <QueueMediaCard
-                    projectId={project.id}
-                    label={media.slotConflict ? "历史视频 · 槽位冲突" : "历史视频 · 账号未标注"}
-                    media={media}
-                    legacy={media.legacyAccountRole}
-                    scope={media.role}
-                    state={stateForAsset(media, states, `media:${media.id}`)}
-                    sessionId={sessionId}
-                    onOpenMenu={onOpenMenu}
-                    onRemove={() => onRemoveMedia(
-                      project.id,
-                      media.role,
-                      media.accountRole || PROJECT_MEDIA_SLOTS.find((slot) => slot.role === media.role)?.accountRole,
-                      media.id || "",
-                      { legacyAccountRole: media.legacyAccountRole },
-                    )}
-                    key={media.id || media.relativePath || mediaIndex}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="queue-actions">
-            <button type="button" className="quiet-button" onClick={() => onEdit(project)}><PencilLine size={16} />继续创作</button>
-            <button type="button" className="publish-button" onClick={() => onPublish(project)}><Check size={16} />发布</button>
-            <button type="button" className="delete-queue-button" onClick={() => onDelete(project)}><Trash2 size={16} />删除</button>
-          </div>
-        </div>
+        ))}
       </div>
-    </>
+      {mediaProjection.legacyOverflow.length > 0 && (
+        <div className="queue-media-legacy-grid" aria-label="历史未归位视频">
+          {mediaProjection.legacyOverflow.map((media, mediaIndex) => (
+            <QueueMediaCard
+              projectId={project.id}
+              label={media.slotConflict ? "历史视频 · 槽位冲突" : "历史视频 · 账号未标注"}
+              media={media}
+              legacy={media.legacyAccountRole}
+              scope={media.role}
+              state={stateForAsset(media, states, `media:${media.id}`)}
+              sessionId={sessionId}
+              onOpenMenu={onOpenMenu}
+              onRemove={() => onRemoveMedia(
+                project.id,
+                media.role,
+                media.accountRole || PROJECT_MEDIA_SLOTS.find((slot) => slot.role === media.role)?.accountRole,
+                media.id || "",
+                { legacyAccountRole: media.legacyAccountRole },
+              )}
+              key={media.id || media.relativePath || mediaIndex}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -742,11 +923,11 @@ function SortableQueueCard(props) {
     <article
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`queue-card ${props.expanded ? "queue-covers-open" : ""} ${isDragging ? "dragging" : ""}`}
+      className={`queue-card ${props.expandedAccount ? "queue-covers-open" : ""} ${isDragging ? "dragging" : ""}`}
       data-project-id={project.id}
       role="group"
       tabIndex={0}
-      aria-label={`${project.title || "未命名创作"}，待发布项目`}
+      aria-label={`${project.title || "未命名创作"}，创作台项目`}
       onPointerDown={startCardDrag}
       onContextMenu={(event) => {
         if (event.target.closest("button, input, select, textarea, [data-no-sort]")) return;
@@ -791,21 +972,14 @@ function QueueDragOverlay({ project, index }) {
   return (
     <article className="queue-card queue-card-overlay" aria-hidden="true">
       <div className="drag-zone"><GripVertical size={20} /></div>
-      <div className="priority-block"><strong>{String(index + 1).padStart(2, "0")}</strong></div>
       <div className="queue-card-main">
-        <div className="queue-card-topbar">
-          <span className="queue-status-text">{isCreationComplete(project) ? "创作已完成" : "正在创作"}</span>
-          <span>{project.category || "未分类"}</span>
-          <span>资料 {projectMaterialCount(project)}/5</span>
-        </div>
-        <div className="queue-card-content">
-          <div className="overlay-cover">
-            {coverSource(projectCoverCandidates(project)[0]) ? <QueueImage src={coverSource(projectCoverCandidates(project)[0])} alt="" /> : <ImagePlus size={24} />}
-          </div>
-          <div className="queue-copy">
-            <div className="queue-text-field queue-title"><h3>{project.title || "未命名创作"}</h3></div>
-            <div className="queue-text-field queue-summary"><p>{project.body || "尚未填写正文"}</p></div>
-          </div>
+        <header className="queue-card-header"><strong className="queue-card-number">{String(index + 1).padStart(2, "0")}</strong></header>
+        <div className="queue-account-grid">
+          {CONTENT_ACCOUNT_VARIANTS.map((variant) => (
+            <div className="queue-account-column" key={variant.id}>
+              <div className="queue-account-title-row"><span className="queue-account-badge">{variant.label}</span><strong>{projectAccountCopy(project, variant.id).title || "未填写标题"}</strong></div>
+            </div>
+          ))}
         </div>
       </div>
     </article>
@@ -865,10 +1039,11 @@ export function QueuePage({
   categories,
   mediaUploads,
   notify,
+  onCreateContent,
   onEdit,
   onDeleteProject,
+  onCompleteProject,
   onUpdateProject,
-  onPublish,
   onUploadCovers,
   onUploadMedia,
   onRemoveMedia,
@@ -878,13 +1053,17 @@ export function QueuePage({
 }) {
   const [expanded, setExpanded] = useState(null);
   const [activeId, setActiveId] = useState(null);
+  const [creatingContent, setCreatingContent] = useState(false);
+  const [newProjectId, setNewProjectId] = useState("");
   const [previewCover, setPreviewCover] = useState(null);
   const [uploadingProjectId, setUploadingProjectId] = useState(null);
-  const [statusFilter, setStatusFilter] = useState("全部");
+  const [formatPreview, setFormatPreview] = useState(null);
+  const [formattedBodyUndo, setFormattedBodyUndo] = useState({});
   const [assetStates, setAssetStates] = useState({});
   const [contextMenu, setContextMenu] = useState(null);
   const startingOrder = useRef([]);
   const coverInputRef = useRef(null);
+  const inputCoverRoleRef = useRef("blogger");
   const mediaInputRef = useRef(null);
   const inputMediaSlotRef = useRef(null);
   const inputProjectIdRef = useRef("");
@@ -893,10 +1072,68 @@ export function QueuePage({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  useEffect(() => {
+    if (!newProjectId || !projects.some((project) => project.id === newProjectId)) return;
+    const frame = window.requestAnimationFrame(() => {
+      const input = document.querySelector(`[data-project-id="${newProjectId}"] textarea[aria-label="博主号标题"]`);
+      if (!(input instanceof HTMLTextAreaElement)) return;
+      input.scrollIntoView({ behavior: "smooth", block: "center" });
+      input.focus({ preventScroll: true });
+      input.select();
+      setNewProjectId("");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [newProjectId, projects]);
+
+  const createContent = async () => {
+    if (creatingContent || !onCreateContent) return;
+    setCreatingContent(true);
+    try {
+      const project = await onCreateContent();
+      if (project?.id) {
+        setNewProjectId(project.id);
+      }
+    } finally {
+      setCreatingContent(false);
+    }
+  };
+
+  const previewBodyFormat = (project, accountRole, body) => {
+    const formatted = formatBodyText(body);
+    const accountLabel = CONTENT_ACCOUNT_VARIANTS.find((item) => item.id === accountRole)?.label || "正文";
+    setFormatPreview({ projectId: project.id, accountRole, accountLabel, original: body, formatted });
+  };
+
+  const confirmBodyFormat = () => {
+    if (!formatPreview) return;
+    const { projectId, accountRole, original, formatted } = formatPreview;
+    if (original === formatted) {
+      setFormatPreview(null);
+      return;
+    }
+    onUpdateProject(projectId, (current) => updateProjectAccountCopy(current, accountRole, { body: formatted }));
+    setFormattedBodyUndo((current) => ({ ...current, [`${projectId}:${accountRole}`]: original }));
+    setFormatPreview(null);
+    notify("已规整正文格式，可撤销");
+  };
+
+  const undoBodyFormat = (project, accountRole) => {
+    const key = `${project.id}:${accountRole}`;
+    const original = formattedBodyUndo[key];
+    if (typeof original !== "string") return;
+    onUpdateProject(project.id, (current) => updateProjectAccountCopy(current, accountRole, { body: original }));
+    setFormattedBodyUndo((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    notify("已恢复规整前正文");
+  };
+
   const statusSignature = useMemo(() => JSON.stringify(projects.map((project) => ({
     id: project.id,
-    covers: projectCoverCandidates(project).map((cover) => libraryRelativePath(cover)),
-    media: [...projectOriginalMediaItems(project), ...projectFinishedVideos(project)].map((media) => libraryRelativePath(media)),
+    covers: projectCoverCandidates(project).map((cover) => libraryRelativePath(cover) || cover.eagleItemId || ""),
+    media: [...projectOriginalMediaItems(project), ...projectFinishedVideos(project)].map((media) => libraryRelativePath(media) || media.eagleItemId || ""),
   }))), [projects]);
 
   useEffect(() => {
@@ -909,13 +1146,17 @@ export function QueuePage({
           ...projectCoverCandidates(project).map((cover) => ({
             key: `cover:${cover.id}`,
             relativePath: libraryRelativePath(cover),
+            eagleItemId: cover.eagleItemId || "",
+            eagleFolderId: cover.eagleFolderId || "",
             scope: "cover",
-          })).filter((asset) => asset.relativePath),
+          })).filter((asset) => asset.relativePath || asset.eagleItemId),
           ...[...projectOriginalMediaItems(project), ...projectFinishedVideos(project)].map((media) => ({
             key: `media:${media.id}`,
             relativePath: libraryRelativePath(media),
+            eagleItemId: media.eagleItemId || "",
+            eagleFolderId: media.eagleFolderId || "",
             scope: media.role === "source_video" ? "source_video" : "finished_video",
-          })).filter((asset) => asset.relativePath),
+          })).filter((asset) => asset.relativePath || asset.eagleItemId),
         ];
         try {
           const result = await fetchProjectAssetStates({
@@ -949,32 +1190,34 @@ export function QueuePage({
 
   const deleteProject = (project) => {
     const title = project.title || "未命名创作";
-    const confirmed = window.confirm(`确定彻底删除「${title}」吗？\n这条内容的文字、封面、原素材、成品视频和资料库文件都会立即删除，无法恢复。`);
+    const confirmed = window.confirm(`确定从软件中删除「${title}」吗？\n\n只会删除这条内容文档和索引，不会删除 Eagle 中的任何文件。`);
     if (!confirmed) return;
     onDeleteProject(project.id);
-    setExpanded((current) => current === project.id ? null : current);
+    setExpanded((current) => current?.startsWith(`${project.id}:`) ? null : current);
     setPreviewCover(null);
-    notify("正在彻底删除");
+    notify("正在删除软件索引");
   };
 
-  const chooseCovers = (projectId) => {
+  const chooseCovers = (projectId, accountRole) => {
     inputProjectIdRef.current = projectId;
+    inputCoverRoleRef.current = accountRole;
     coverInputRef.current?.click();
   };
 
   const uploadCovers = async (event) => {
     const projectId = inputProjectIdRef.current;
+    const accountRole = inputCoverRoleRef.current;
     const files = Array.from(event.target.files || []);
     event.target.value = "";
     if (!projectId || !files.length) return;
-    await uploadCoverFiles(projectId, files);
+    await uploadCoverFiles(projectId, accountRole, files);
   };
 
-  const uploadCoverFiles = async (projectId, files) => {
+  const uploadCoverFiles = async (projectId, accountRole, files) => {
     if (!projectId || !files.length) return;
     setUploadingProjectId(projectId);
     try {
-      await onUploadCovers(projectId, files);
+      await onUploadCovers(projectId, files, accountRole);
     } finally {
       setUploadingProjectId(null);
       inputProjectIdRef.current = "";
@@ -1052,11 +1295,11 @@ export function QueuePage({
 
   const activeProject = projects.find((project) => project.id === activeId);
   const activeIndex = activeProject ? projects.indexOf(activeProject) : 0;
-  const filteredProjects = projects.filter((project) => (
-    statusFilter === "全部"
-    || (statusFilter === "已完成" ? isCreationComplete(project) : !isCreationComplete(project))
-  ));
-  const completedCount = projects.filter(isCreationComplete).length;
+  // Array membership is the source of truth: projects belong to the creation
+  // workspace and archive items belong to the archive. Legacy projects may
+  // already carry creationStatus=completed, but must remain visible until the
+  // user explicitly completes and moves them.
+  const filteredProjects = projects;
 
   return (
     <div
@@ -1069,19 +1312,12 @@ export function QueuePage({
         setExpanded(null);
       }}
     >
-      <QueueHeader completedCount={completedCount} setSidebarOpen={setSidebarOpen} />
-      <div className="toolbar-row queue-toolbar">
-        <div className="segmented-control" aria-label="创作状态筛选">
-          {[
-            { id: "全部", count: projects.length },
-            { id: "正在创作", count: projects.length - completedCount },
-            { id: "已完成", count: completedCount },
-          ].map((item) => (
-            <button type="button" key={item.id} className={statusFilter === item.id ? "active" : ""} onClick={() => setStatusFilter(item.id)}>{item.id} <small>{item.count}</small></button>
-          ))}
-        </div>
-        <span className="result-count">{filteredProjects.length} 条待发布内容</span>
-      </div>
+      <QueueHeader
+        creatingContent={creatingContent}
+        onCreateContent={createContent}
+        setSidebarOpen={setSidebarOpen}
+      />
+      <div className="toolbar-row queue-toolbar"><span className="result-count">{filteredProjects.length} 条正在创作</span></div>
       <div className="queue-legend"><div><GripVertical size={16} /><span>拖动卡片调整顺序</span></div></div>
 
       {filteredProjects.length ? (
@@ -1110,27 +1346,36 @@ export function QueuePage({
           }}
         >
           <SortableContext items={filteredProjects.map((project) => project.id)} strategy={verticalListSortingStrategy}>
-            <section className="queue-list" aria-label="待发布项目">
+            <section className="queue-list" aria-label="创作台项目">
               {filteredProjects.map((project) => (
                 <SortableQueueCard
                   key={project.id}
                   project={project}
                   index={projects.indexOf(project)}
-                  expanded={expanded === project.id}
+                  expandedAccount={expanded?.startsWith(`${project.id}:`) ? expanded.split(":")[1] : null}
                   categories={categories}
                   states={assetStates}
                   sessionId={storage?.sessionId || ""}
                   mediaUploads={mediaUploads}
                   notify={notify}
-                  onToggle={() => setExpanded(expanded === project.id ? null : project.id)}
                   onEdit={onEdit}
-                  onPublish={onPublish}
+                  onToggleAccount={(accountRole) => {
+                    const key = `${project.id}:${accountRole}`;
+                    setExpanded((current) => current === key ? null : key);
+                  }}
                   onDelete={deleteProject}
+                  onComplete={async (item) => {
+                    setExpanded((current) => current?.startsWith(`${item.id}:`) ? null : current);
+                    await onCompleteProject?.(item.id);
+                  }}
                   onUpdateProject={onUpdateProject}
-                  onAddCover={() => chooseCovers(project.id)}
-                  onDropCovers={(files) => {
-                    setExpanded(project.id);
-                    uploadCoverFiles(project.id, files);
+                  onFormatBody={previewBodyFormat}
+                  onUndoBodyFormat={undoBodyFormat}
+                  formattedBodyUndo={formattedBodyUndo}
+                  onAddCover={(accountRole) => chooseCovers(project.id, accountRole)}
+                  onDropCovers={(accountRole, files) => {
+                    setExpanded(`${project.id}:${accountRole}`);
+                    uploadCoverFiles(project.id, accountRole, files);
                   }}
                   onRemoveCover={(cover) => removeCover(project.id, cover)}
                   onPreviewCover={setPreviewCover}
@@ -1150,14 +1395,21 @@ export function QueuePage({
       ) : (
         <div className="empty-state">
           <div className="empty-icon"><Plus size={20} /></div>
-          <h2>{projects.length ? "这个状态下没有内容" : "待发布为空"}</h2>
-          <p>{projects.length ? "切换上方状态查看其他内容。" : "从灵感卡片点“创作”，保存后会进入这里排序和交接。"}</p>
+          <h2>{projects.length ? "没有正在创作的内容" : "创作台为空"}</h2>
+          <p>{projects.length ? "已完成内容在归档库中保留。" : "从灵感卡片点“创作”，保存后会进入这里继续整理。"}</p>
+          {!filteredProjects.length && (
+            <button type="button" className="primary-button queue-empty-create" onClick={createContent} disabled={creatingContent}>
+              {creatingContent ? <RefreshCw size={16} className="spin" /> : <Plus size={16} />}
+              {creatingContent ? "正在新建" : "新建第一条内容"}
+            </button>
+          )}
         </div>
       )}
 
-      <input ref={coverInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="选择待发布封面图片" onChange={uploadCovers} />
-      <input ref={mediaInputRef} className="sr-only" type="file" accept={VIDEO_ACCEPT} aria-label="选择待发布视频素材" onChange={uploadMedia} />
+      <input ref={coverInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="选择创作台封面图片" onChange={uploadCovers} />
+      <input ref={mediaInputRef} className="sr-only" type="file" accept={VIDEO_ACCEPT} aria-label="选择创作台视频素材" onChange={uploadMedia} />
       <CoverPreviewModal cover={previewCover} onClose={() => setPreviewCover(null)} />
+      <BodyFormatPreviewModal preview={formatPreview} onClose={() => setFormatPreview(null)} onConfirm={confirmBodyFormat} />
       <QueueContextMenu
         menu={contextMenu}
         onClose={() => setContextMenu(null)}

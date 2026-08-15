@@ -207,7 +207,7 @@ test("灵感库显示克制的关联层级且参考卡片不继承关联边框",
   expect(afterHover.width).toBeCloseTo(beforeHover.width, 1);
   expect(afterHover.height).toBeCloseTo(beforeHover.height, 1);
 
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
   const referenceCard = page.locator(`.creation-reference-grid [data-inspiration-id="I001002"]`);
   await expect(referenceCard).toBeVisible();
   await expect(referenceCard).toHaveAttribute("data-linked", "false");
@@ -238,7 +238,7 @@ test("已关联筛选与搜索、用户分类组合工作且空结果不误报�
 
 test("移除一处重复引用仍保持关联，最后一处移除后状态消失", async ({ page }) => {
   await page.goto("/");
-  await page.getByLabel("主导航").getByRole("button", { name: "创作", exact: true }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: "编辑", exact: true }).click();
 
   const referenceCard = page.locator(`.creation-reference-grid [data-inspiration-id="I001002"]`);
   await referenceCard.locator('summary[aria-label="更多操作"]').click();
@@ -247,7 +247,7 @@ test("移除一处重复引用仍保持关联，最后一处移除后状态消�
   await page.getByLabel("主导航").getByRole("button", { name: "灵感库", exact: true }).click();
   await expect(inspirationCard(page, "I001002")).toHaveAttribute("data-linked", "true");
 
-  await page.getByLabel("主导航").getByRole("button", { name: /^待发布/ }).click();
+  await page.getByLabel("主导航").getByRole("button", { name: /^创作台/ }).click();
   const queueCard = page.locator('[data-project-id="C001001"]');
   page.once("dialog", (dialog) => dialog.accept());
   await queueCard.getByRole("button", { name: "删除", exact: true }).click();

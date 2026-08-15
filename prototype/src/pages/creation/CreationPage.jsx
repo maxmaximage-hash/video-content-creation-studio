@@ -37,10 +37,16 @@ import {
   isCreationComplete,
   PROJECT_MEDIA_SLOTS,
   projectCoverCandidates,
-  projectMaterialCount,
   projectMediaSlotKey,
   projectMediaSlotProjection,
 } from "./project-model.js";
+import {
+  CONTENT_ACCOUNT_VARIANTS,
+  projectAccountCopy,
+  projectAccountCovers,
+  updateProjectAccountCopy,
+} from "../queue/content-variants.js";
+import { eagleMediaSource } from "../../services/eagle-media.js";
 import "./creation.css";
 
 const VIDEO_ACCEPT = "video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm";
@@ -69,7 +75,7 @@ function CreationHeader({ eyebrow, description, actions, setSidebarOpen }) {
         </CreationIconButton>
         <div>
           <span className="eyebrow">{eyebrow}</span>
-          <h1>创作</h1>
+          <h1>编辑</h1>
           <p>{description}</p>
         </div>
       </div>
@@ -144,6 +150,7 @@ function ProjectMediaSlot({
 }) {
   const [fileDragActive, setFileDragActive] = useState(false);
   const dropDepthRef = useRef(0);
+  const mediaSrc = media?.src || eagleMediaSource(media);
   const nativeDraggable = Boolean(media?.relativePath && window.videoContentDesktop?.startFileDrag);
   const startNativeFileDrag = (event) => {
     if (!nativeDraggable) return;
@@ -175,7 +182,7 @@ function ProjectMediaSlot({
   };
   return (
     <div
-      className={`project-media-slot ${media?.src ? "has-media" : ""} ${fileDragActive ? "is-file-dragging" : ""}`}
+      className={`project-media-slot ${mediaSrc ? "has-media" : ""} ${fileDragActive ? "is-file-dragging" : ""}`}
       data-no-sort
       onDragEnter={(event) => {
         if (!hasDraggedFiles(event)) return;
@@ -200,11 +207,11 @@ function ProjectMediaSlot({
         <span className="project-media-slot-icon">{role === "source_video" ? <Video size={18} /> : <FileVideo2 size={18} />}</span>
         <div><strong>{title}</strong><small>{legacy ? "历史素材 · 账号未标注" : description}</small></div>
       </div>
-      {media?.src ? (
+      {mediaSrc ? (
         <>
           <video
-            key={media.src}
-            src={media.src}
+            key={mediaSrc}
+            src={mediaSrc}
             controls
             preload="metadata"
             playsInline
@@ -214,7 +221,7 @@ function ProjectMediaSlot({
           />
           <div className="project-media-file">
             <div><strong title={media.name}>{media.name}</strong><span>{size}</span></div>
-            <button type="button" className="quiet-button" onClick={onReveal}><FolderOpen size={14} />访达</button>
+            {media?.relativePath && <button type="button" className="quiet-button" onClick={onReveal}><FolderOpen size={14} />访达</button>}
             {onChoose && <button type="button" className="quiet-button" onClick={onChoose}><RefreshCw size={14} />替换</button>}
             <CreationIconButton label={`永久删除${title}`} onClick={onRemove}><X size={15} /></CreationIconButton>
           </div>
@@ -403,7 +410,7 @@ function NewProjectModal({ onClose, onDiscard, onQueue }) {
         </button>
         <button type="button" onClick={onQueue}>
           <span><Inbox size={18} /></span>
-          <div><strong>保存到待发布</strong><p>完整保留当前标题、正文、分类、封面、参考和视频素材。</p></div>
+          <div><strong>保存到创作台</strong><p>完整保留当前标题、正文、分类、封面、参考和视频素材。</p></div>
         </button>
       </div>
       <div className="modal-footer">
@@ -415,6 +422,9 @@ function NewProjectModal({ onClose, onDiscard, onQueue }) {
 
 export function CreationPage({
   activeProject,
+  accountRole = "blogger",
+  editingExisting = false,
+  onAccountRoleChange,
   inspirationItems,
   categories,
   notify,
@@ -469,12 +479,33 @@ export function CreationPage({
   }
 
   const projectUploads = mediaUploads[project.id] || {};
-  const coverCandidates = projectCoverCandidates(project);
+  const selectedAccount = CONTENT_ACCOUNT_VARIANTS.find((item) => item.id === accountRole)
+    || CONTENT_ACCOUNT_VARIANTS[0];
+  const selectedAccountRole = selectedAccount.id;
+  const accountCopy = projectAccountCopy(project, selectedAccountRole);
+  const coverCandidates = projectAccountCovers(
+    project,
+    selectedAccountRole,
+    projectCoverCandidates(project),
+  );
   const mediaProjection = projectMediaSlotProjection(project);
+  const accountMediaSlots = mediaProjection.slots.filter((slot) => slot.accountRole === selectedAccountRole);
+  const accountLegacyMedia = mediaProjection.legacyOverflow.filter((media) => (
+    media.accountRole === selectedAccountRole
+    || (selectedAccountRole === "blogger" && media.legacyAccountRole)
+  ));
   const creationComplete = isCreationComplete(project);
   const selectedReferenceIds = new Set(project.references?.map((item) => item.id) || []);
   const hasContent = hasProjectContent(project, projectUploads);
-  const update = (field, value) => onUpdateProject(project.id, (current) => ({ ...current, [field]: value, modified: "刚刚" }));
+  const accountMaterialCount = [
+    accountCopy.title.trim(),
+    accountCopy.body.trim(),
+    coverCandidates.length,
+    ...accountMediaSlots.map((slot) => slot.asset),
+  ].filter(Boolean).length;
+  const update = (field, value) => onUpdateProject(project.id, (current) => (
+    updateProjectAccountCopy(current, selectedAccountRole, { [field]: value })
+  ));
 
   const uploadCoverFiles = async (fileList) => {
     const files = Array.from(fileList || []).filter((file) => (
@@ -484,7 +515,7 @@ export function CreationPage({
     if (!files.length) return;
     setUploadingCover(true);
     try {
-      await onUploadCovers(project.id, files);
+      await onUploadCovers(project.id, files, selectedAccountRole);
     } finally {
       setUploadingCover(false);
     }
@@ -500,27 +531,39 @@ export function CreationPage({
   const reorderCovers = ({ active, over }) => {
     if (!over || active.id === over.id) return;
     onUpdateProject(project.id, (current) => {
-      const currentCovers = projectCoverCandidates(current);
+      const allCovers = projectCoverCandidates(current);
+      const currentCovers = projectAccountCovers(current, selectedAccountRole, allCovers);
       const oldIndex = currentCovers.findIndex((cover) => cover.id === active.id);
       const newIndex = currentCovers.findIndex((cover) => cover.id === over.id);
       if (oldIndex < 0 || newIndex < 0) return current;
-      const next = [...(current.covers || [])];
-      const [moved] = next.splice(oldIndex, 1);
-      next.splice(newIndex, 0, moved);
-      return { ...current, covers: next, modified: "刚刚" };
+      const reordered = [...currentCovers];
+      const [moved] = reordered.splice(oldIndex, 1);
+      reordered.splice(newIndex, 0, moved);
+      const selectedIds = new Set(currentCovers.map((cover) => cover.id));
+      let replacementIndex = 0;
+      const covers = allCovers.map((cover) => (
+        selectedIds.has(cover.id) ? reordered[replacementIndex++] : cover
+      ));
+      return { ...current, covers, modified: "刚刚" };
     });
   };
   const reorderCoverWithKeyboard = (coverId, direction) => {
     keyboardReorderHandledRef.current = true;
     onUpdateProject(project.id, (current) => {
-      const currentCovers = projectCoverCandidates(current);
+      const allCovers = projectCoverCandidates(current);
+      const currentCovers = projectAccountCovers(current, selectedAccountRole, allCovers);
       const oldIndex = currentCovers.findIndex((cover) => cover.id === coverId);
       const newIndex = Math.max(0, Math.min(currentCovers.length - 1, oldIndex + direction));
       if (oldIndex < 0 || oldIndex === newIndex) return current;
-      const next = [...(current.covers || [])];
-      const [moved] = next.splice(oldIndex, 1);
-      next.splice(newIndex, 0, moved);
-      return { ...current, covers: next, modified: "刚刚" };
+      const reordered = [...currentCovers];
+      const [moved] = reordered.splice(oldIndex, 1);
+      reordered.splice(newIndex, 0, moved);
+      const selectedIds = new Set(currentCovers.map((cover) => cover.id));
+      let replacementIndex = 0;
+      const covers = allCovers.map((cover) => (
+        selectedIds.has(cover.id) ? reordered[replacementIndex++] : cover
+      ));
+      return { ...current, covers, modified: "刚刚" };
     });
   };
   const removeCover = (id) => {
@@ -575,14 +618,29 @@ export function CreationPage({
   return (
     <div className="page-shell creation-shell">
       <CreationHeader
-        eyebrow={`02 / ${creationComplete ? "创作已完成" : "正在创作"}`}
-        description="封面、文案、原始拍摄素材和成品视频都保存到当前资料库。"
+        eyebrow={`02 / ${selectedAccount.label}编辑`}
+        description={editingExisting
+          ? `正在编辑 ${project.id} 的${selectedAccount.label}内容，完成后同步回创作台。`
+          : "封面、文案、原始拍摄素材和成品视频都保存到当前资料库。"}
         setSidebarOpen={setSidebarOpen}
         actions={(
           <div className="creation-header-actions">
-            <button type="button" className="quiet-button creation-clear-button" disabled={!hasContent} onClick={() => hasContent ? setDialog("clear") : onClearProject(project.id)}><Trash2 size={15} />清空全部</button>
-            <button type="button" className="quiet-button creation-new-button" onClick={() => hasContent ? setDialog("new") : onCreateBlank()}><Plus size={15} />新建创作</button>
-            <span className="creation-material-count"><CheckCircle2 size={15} />资料 {projectMaterialCount(project)}/5</span>
+            {!editingExisting && <button type="button" className="quiet-button creation-clear-button" disabled={!hasContent} onClick={() => hasContent ? setDialog("clear") : onClearProject(project.id)}><Trash2 size={15} />清空全部</button>}
+            {!editingExisting && <button type="button" className="quiet-button creation-new-button" onClick={() => hasContent ? setDialog("new") : onCreateBlank()}><Plus size={15} />新建创作</button>}
+            <div className="segmented-control creation-account-control" aria-label="编辑账号">
+              {CONTENT_ACCOUNT_VARIANTS.map((variant) => (
+                <button
+                  type="button"
+                  className={selectedAccountRole === variant.id ? "active" : ""}
+                  aria-pressed={selectedAccountRole === variant.id}
+                  onClick={() => onAccountRoleChange(variant.id)}
+                  key={variant.id}
+                >
+                  {variant.label}
+                </button>
+              ))}
+            </div>
+            <span className="creation-material-count"><CheckCircle2 size={15} />资料 {accountMaterialCount}/5</span>
             <label className="creation-category-control">
               <Tags size={15} />
               <select
@@ -594,11 +652,11 @@ export function CreationPage({
                 {categories.map((category) => <option value={category} key={category}>{category}</option>)}
               </select>
             </label>
-            <div className="segmented-control creation-status-control" aria-label="创作状态">
+            {!editingExisting && <div className="segmented-control creation-status-control" aria-label="创作状态">
               <button type="button" className={!creationComplete ? "active" : ""} aria-pressed={!creationComplete} onClick={() => setCreationStatus("in_progress")}>正在创作</button>
               <button type="button" className={creationComplete ? "active completed" : ""} aria-pressed={creationComplete} onClick={() => setCreationStatus("completed")}>创作已完成</button>
-            </div>
-            <button type="button" className="primary-button" onClick={() => onQueue(project.id)}><Inbox size={16} />保存到待发布</button>
+            </div>}
+            <button type="button" className="primary-button" onClick={() => onQueue(project.id)}><Inbox size={16} />{editingExisting ? "完成编辑" : "保存到创作台"}</button>
           </div>
         )}
       />
@@ -669,20 +727,20 @@ export function CreationPage({
           </section>
 
           <section className="editor-section">
-            <div className="section-heading"><div><span>标题</span><small>发布时将冻结为快照</small></div><CreationCopyButton value={project.title} notify={notify} /></div>
-            <input className="title-input" value={project.title} onChange={(event) => update("title", event.target.value)} placeholder="输入视频标题" />
+            <div className="section-heading"><div><span>标题</span><small>{selectedAccount.label}内容</small></div><CreationCopyButton value={accountCopy.title} notify={notify} /></div>
+            <input className="title-input" aria-label={`${selectedAccount.label}编辑标题`} value={accountCopy.title} onChange={(event) => update("title", event.target.value)} placeholder={`输入${selectedAccount.label}视频标题`} />
           </section>
 
           <section className="editor-section body-section">
-            <div className="section-heading"><div><span>正文</span><small>{project.body.length} 字</small></div><CreationCopyButton value={project.body} notify={notify} /></div>
-            <textarea value={project.body} onChange={(event) => update("body", event.target.value)} placeholder="写下视频正文、口播文案或发布说明" />
+            <div className="section-heading"><div><span>正文</span><small>{accountCopy.body.length} 字</small></div><CreationCopyButton value={accountCopy.body} notify={notify} /></div>
+            <textarea aria-label={`${selectedAccount.label}编辑正文`} value={accountCopy.body} onChange={(event) => update("body", event.target.value)} placeholder={`写下${selectedAccount.label}视频正文、口播文案或内容说明`} />
           </section>
 
           <section className="editor-section project-media-section">
             <div className="section-heading"><div><span>视频素材</span><small>按内容 ID 保存到项目目录</small></div></div>
             <input ref={mediaInputRef} className="sr-only" type="file" accept={VIDEO_ACCEPT} aria-label="选择创作视频素材" onChange={selectProjectMedia} />
             <div className="project-media-grid">
-              {mediaProjection.slots.map((slot) => {
+              {accountMediaSlots.map((slot) => {
                 const upload = projectUploads[projectMediaSlotKey(slot.role, slot.accountRole)];
                 return (
                   <ProjectMediaSlot
@@ -708,9 +766,9 @@ export function CreationPage({
                 );
               })}
             </div>
-            {mediaProjection.legacyOverflow.length > 0 && (
+            {accountLegacyMedia.length > 0 && (
               <div className="project-media-legacy" aria-label="历史未归位视频">
-                {mediaProjection.legacyOverflow.map((media, index) => (
+                {accountLegacyMedia.map((media, index) => (
                   <ProjectMediaSlot
                     role={media.role}
                     title={media.slotConflict ? "历史视频 · 槽位冲突" : "历史视频 · 账号未标注"}
@@ -743,7 +801,7 @@ export function CreationPage({
               {project.references.length
                 ? project.references.map((item) => renderReferenceCard(item, {
                     onCategoryChange: (id, value) => onUpdateReference(project.id, id, { category: value, categoryAssignedByUser: true }),
-                    onBodyChange: (id, value) => onUpdateReference(project.id, id, { body: value }),
+                    onBodyChange: (id, value) => onUpdateReference(project.id, id, value && typeof value === "object" ? value : { body: value }),
                     onDetach: (id) => onUpdateProject(project.id, (current) => ({ ...current, references: current.references.filter((reference) => reference.id !== id), modified: "刚刚" })),
                   }))
                 : <p className="muted-line">这个内容还没有关联灵感。</p>}

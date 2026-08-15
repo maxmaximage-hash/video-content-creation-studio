@@ -1,9 +1,9 @@
 {
   "name": "video-content-creation-studio",
-  "productName": "视频内容创作中台",
+  "productName": "Video Hub",
   "description": "面向真实内容生产流程的本地视频创作工作台",
   "author": "引力环球",
-  "version": "0.2.0-dev.0",
+  "version": "1.7.0",
   "license": "MIT",
   "homepage": "https://github.com/maxmaximage-hash/video-content-creation-studio#readme",
   "repository": {
@@ -36,7 +36,7 @@
   },
   "build": {
     "appId": "com.yinli.video-content-creation-studio",
-    "productName": "视频内容创作中台",
+    "productName": "Video Hub",
     "asar": true,
     "electronDist": "node_modules/electron/dist",
     "directories": {
@@ -46,6 +46,8 @@
       "dist/client/**/*",
       "desktop/**/*",
       "server/**/*",
+      "src/services/eagle-asset-routing.js",
+      "src/services/project-copy.js",
       "vite.config.mjs",
       "package.json",
       "public/app-icon.png"

@@ -48,6 +48,7 @@ export function projectMediaSlotLabel(role, accountRole) {
 function assetIdentity(asset = {}, fallback = "") {
   return String(
     asset.id
+    || asset.eagleItemId
     || asset.relativePath
     || asset.src
     || asset.localPath
@@ -57,7 +58,7 @@ function assetIdentity(asset = {}, fallback = "") {
 
 export function normalizedProjectMediaAssets(project = {}) {
   const canonical = Array.isArray(project.mediaAssets)
-    ? project.mediaAssets.filter((item) => item?.src || item?.localPath || item?.relativePath)
+    ? project.mediaAssets.filter((item) => item?.src || item?.localPath || item?.relativePath || item?.eagleItemId)
     : [];
   const candidates = canonical.length
     ? canonical

@@ -117,6 +117,15 @@
 
 .creation-status-control button.completed.active { color: var(--green); }
 
+.creation-account-control {
+  flex: 0 0 auto;
+}
+
+.creation-account-control button.active {
+  color: #17130d;
+  background: #d6b36a;
+}
+
 .creation-clear-button {
   color: #d88e87;
   border-color: rgba(218, 104, 95, .18);
