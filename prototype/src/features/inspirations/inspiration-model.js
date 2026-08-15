@@ -341,7 +341,7 @@ export function applyExtraction(card, extraction) {
     resolvedUrl: extraction.resolvedUrl || card.resolvedUrl,
     platformItemId: extraction.platformItemId || card.platformItemId,
     title: extraction.title && isPlaceholderTitle ? extraction.title : card.title,
-    body: visibleBodyText(card) || extractionBody || "",
+    body: String(extraction.transcript || "").trim() || visibleBodyText(card) || extractionBody || "",
     transcript: extraction.transcript || card.transcript || "",
     transcriptSource: extraction.transcriptSource || card.transcriptSource || "",
     transcriptState: extraction.transcriptState || card.transcriptState || "",

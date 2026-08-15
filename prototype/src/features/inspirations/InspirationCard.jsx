@@ -80,6 +80,7 @@ export function InspirationCard({
       .catch(() => notify("已模拟复制全文"));
   };
   const transcriptText = String(item.transcript || "").trim();
+  const transcriptIsBody = Boolean(transcriptText && bodyText.trim() === transcriptText);
   const transcriptCanRun = Boolean(
     onTranscribe
     && (String(item.videoLocalPath || "").startsWith("/library-assets/") || eagleItemId),
@@ -128,7 +129,7 @@ export function InspirationCard({
       cancelled = true;
       clearTimeout(annotationSaveTimerRef.current);
     };
-  }, [eagleItemId, item.id]);
+  }, [eagleItemId, item.id, item.captionSha256, item.transcript]);
 
   const hashCaption = async (value) => {
     const bytes = new TextEncoder().encode(value);
@@ -380,7 +381,7 @@ export function InspirationCard({
             )}
           </div>
         )}
-        {transcriptText && (
+        {transcriptText && !transcriptIsBody && (
           <details className="card-transcript">
             <summary>
               <span><FileText size={13} />逐字稿</span>

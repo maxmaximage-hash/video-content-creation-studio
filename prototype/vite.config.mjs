@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { constants as fsConstants, createReadStream, createWriteStream } from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -53,6 +54,7 @@ import {
   setEagleAnnotation,
 } from "./server/eagle-adapter.mjs";
 import { eagleFolderIdForAsset } from "./src/services/eagle-asset-routing.js";
+import { transcriptBodyPatch } from "./src/services/transcript-body.js";
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const packageMetadata = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
@@ -851,6 +853,10 @@ async function ingestInspiration(payload, requestSessionId, libraryManager) {
 
 const INSPIRATION_PATCH_FIELDS = new Set([
   "body",
+  "captionStorage",
+  "captionEagleItemId",
+  "captionLength",
+  "captionSha256",
   "category",
   "categoryAssignedByUser",
   "refreshState",
@@ -1038,6 +1044,17 @@ function mergeExtractionIntoInspiration(currentItem, extraction) {
   };
 }
 
+async function persistTranscriptAsBody(item, transcript) {
+  const text = String(transcript || "").trim();
+  if (!text) return {};
+  const sha256 = createHash("sha256").update(text).digest("hex");
+  const patch = transcriptBodyPatch(item, text, sha256);
+  if (patch.captionStorage === "eagle_annotation") {
+    await setEagleAnnotation(patch.captionEagleItemId, text);
+  }
+  return patch;
+}
+
 async function commitInspirationExtraction({ libraryManager, sessionId, contentId, generation, extraction }) {
   const id = validateContentId(contentId);
   if (!id.startsWith("I")) return null;
@@ -1067,7 +1084,10 @@ async function commitInspirationExtraction({ libraryManager, sessionId, contentI
     )) {
       throw apiError("小红书采集结果未通过同笔记校验，已停止回写", 409);
     }
-    const nextItem = mergeExtractionIntoInspiration(currentItem, extraction);
+    let nextItem = mergeExtractionIntoInspiration(currentItem, extraction);
+    if (extraction.transcript) {
+      nextItem = { ...nextItem, ...await persistTranscriptAsBody(nextItem, extraction.transcript) };
+    }
     return {
       payload: {
         ...current,
@@ -2244,9 +2264,14 @@ async function transcribeInspiration(payload, sessionId, libraryManager) {
     throw apiError("灵感内容已更新，请刷新后重试", 409);
   }
   const result = await addTranscription(currentItem, { transcribe: true, sessionId }, libraryManager);
+  const transcript = result.transcript || currentItem.transcript || "";
+  const bodyPatch = result.transcriptState === "complete"
+    ? await persistTranscriptAsBody(currentItem, transcript)
+    : {};
   const nextItem = {
     ...currentItem,
-    transcript: result.transcript || currentItem.transcript || "",
+    ...bodyPatch,
+    transcript,
     transcriptSource: result.transcriptSource || currentItem.transcriptSource || "",
     transcriptState: result.transcriptState || "retry_wait",
     transcriptStatus: result.transcriptStatus || "逐字稿暂未生成",

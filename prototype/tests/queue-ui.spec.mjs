@@ -372,7 +372,7 @@ test("正文规整后立即完成仍归档最新内容", async ({ page, request 
 
 test("card hierarchy, editable copy, large cover surfaces and button isolation", async ({ page, request }) => {
   await openQueue(page);
-  await expect(page.locator(".brand-copy span")).toHaveText("V1.8");
+  await expect(page.locator(".brand-copy span")).toHaveText("V1.9");
 
   const firstCard = page.locator('[data-project-id="C000127"]');
   await expect(firstCard.locator(".queue-card-number")).toHaveText("01");
@@ -591,6 +591,35 @@ test("灵感卡片底部优先复制原链接，原视频入口收进三点菜�
   const menuSourceLink = firstInspiration.locator(".card-overflow-menu").getByRole("link", { name: "原视频", exact: true });
   await expect(menuSourceLink).toBeVisible();
   await expect(menuSourceLink).toHaveAttribute("href", "https://www.douyin.com/video/reference-301");
+});
+
+test("逐字稿直接进入正文且保留正文复制按钮", async ({ page, request }) => {
+  const transcript = "名利场上的谈话会暴露一个人的家底、认知和价值观。";
+  const response = await request.post("/api/library", {
+    data: {
+      categories: ["认知"],
+      inspirations: [{
+        ...inspirations[0],
+        id: "I000903",
+        title: "逐字稿正文合并测试",
+        body: transcript,
+        transcript,
+        transcriptSource: "tencent_asr",
+        transcriptState: "complete",
+        transcriptStatus: "逐字稿已生成",
+      }],
+      projects: [],
+      archive: [],
+      activeProject: null,
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+
+  await page.goto("/");
+  const card = page.locator('[data-inspiration-id="I000903"]');
+  await expect(card.getByLabel("灵感正文")).toHaveValue(transcript);
+  await expect(card.locator(".card-transcript")).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "复制全文", exact: true })).toBeEnabled();
 });
 
 test("视频灵感预览默认开声，用户可手动关闭", async ({ page, request }) => {
