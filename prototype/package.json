@@ -48,6 +48,7 @@
       "server/**/*",
       "src/services/eagle-asset-routing.js",
       "src/services/project-copy.js",
+      "src/services/transcript-body.js",
       "vite.config.mjs",
       "package.json",
       "public/app-icon.png"
