@@ -664,7 +664,7 @@ function MediaPreview({ item, compact = false }) {
             muted={isMuted}
             loop
             playsInline
-            preload="auto"
+            preload="none"
             poster={videoReady ? undefined : coverSrc || undefined}
             onLoadedMetadata={updateDuration}
             onLoadedData={updateDuration}

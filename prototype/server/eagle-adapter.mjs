@@ -130,18 +130,21 @@ async function pathExists(value) {
   return fs.access(value, fsConstants.R_OK).then(() => true).catch(() => false);
 }
 
-async function eagleLibraryRoots() {
-  const raw = [
+function eagleLibraryRoots() {
+  const explicitRoots = [
     process.env.VIDEO_STUDIO_EAGLE_LIBRARY_ROOT,
     process.env.EAGLE_LIBRARY_ROOT,
+  ].filter(Boolean);
+  const defaultRoots = [
     "/Volumes/团队文件-MAX线上协作中台/引力环球视频.library",
     "/Volumes/团队文件-MAX线上协作中台/引力环球.library",
     path.join(os.homedir(), "引力环球/引力环球.library"),
-  ].filter(Boolean);
+  ];
+  const raw = explicitRoots.length ? explicitRoots : defaultRoots;
   const roots = [];
   for (const root of raw) {
     if (roots.includes(root)) continue;
-    if (await pathExists(path.join(root, "images"))) roots.push(root);
+    roots.push(root);
   }
   return roots;
 }
@@ -169,7 +172,7 @@ async function findEagleInfoDir(itemId) {
   const id = validateEagleItemId(itemId);
   const cached = INFO_DIR_CACHE.get(id);
   if (cached && await pathExists(cached)) return cached;
-  for (const root of await eagleLibraryRoots()) {
+  for (const root of eagleLibraryRoots()) {
     const found = await findInfoDirInDirectory(path.join(root, "images"), id, 3);
     if (found) {
       INFO_DIR_CACHE.set(id, found);
@@ -177,6 +180,20 @@ async function findEagleInfoDir(itemId) {
     }
   }
   throw new EagleUnavailableError("Eagle 文件不可用/重新关联", 404);
+}
+
+async function eagleItemInfoFromLibrary(itemId) {
+  const id = validateEagleItemId(itemId);
+  const infoDir = await findEagleInfoDir(id);
+  const metadataPath = path.join(infoDir, "metadata.json");
+  let metadata = {};
+  try {
+    metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+  } catch {
+    // The original file can still be served when an older Eagle item has no metadata file.
+  }
+  if (metadata.isDeleted) throw new EagleUnavailableError("Eagle 文件不可用/重新关联", 404);
+  return { ...metadata, id };
 }
 
 export async function resolveEagleOriginalPath(item, options = {}) {
@@ -235,7 +252,8 @@ export async function serveEagleMedia(req, res, options = {}) {
     const itemId = validateEagleItemId(
       decodeURIComponent(requestUrl.pathname.replace(/^\/api\/eagle-media\/?/, "")) || requestUrl.searchParams.get("itemId"),
     );
-    const item = await eagleItemInfo(itemId, options);
+    const item = await eagleItemInfoFromLibrary(itemId)
+      .catch(() => eagleItemInfo(itemId, options));
     const resolved = await resolveEagleOriginalPath(item, options);
     const size = resolved.stat.size;
     const range = parseRange(req.headers.range, size);

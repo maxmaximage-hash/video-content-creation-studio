@@ -372,7 +372,7 @@ test("正文规整后立即完成仍归档最新内容", async ({ page, request 
 
 test("card hierarchy, editable copy, large cover surfaces and button isolation", async ({ page, request }) => {
   await openQueue(page);
-  await expect(page.locator(".brand-copy span")).toHaveText("V1.7");
+  await expect(page.locator(".brand-copy span")).toHaveText("V1.8");
 
   const firstCard = page.locator('[data-project-id="C000127"]');
   await expect(firstCard.locator(".queue-card-number")).toHaveText("01");
@@ -644,7 +644,7 @@ test("视频灵感预览默认开声，用户可手动关闭", async ({ page, re
     muted: false,
     hasMutedAttribute: false,
     objectFit: "cover",
-    preload: "auto",
+    preload: "none",
     src: "/assets/covers/coffee-alley.png",
   });
   const mediaShape = await videoCard.evaluate((card) => ({

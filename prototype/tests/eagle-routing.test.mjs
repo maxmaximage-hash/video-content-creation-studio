@@ -145,6 +145,51 @@ test("Eagle media endpoint supports HEAD, Range, mime and unavailable states", a
   assert.equal(unavailable.status, 416);
 });
 
+test("Eagle media falls back to the fixed library when another Eagle library is active", async (t) => {
+  const previousRoot = process.env.VIDEO_STUDIO_EAGLE_LIBRARY_ROOT;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "eagle-fixed-library-test-"));
+  const infoDir = path.join(root, "images", "MSOTJV3L8V1WM.info");
+  await fs.mkdir(infoDir, { recursive: true });
+  const bytes = Buffer.from("fixed-library-video");
+  await fs.writeFile(path.join(infoDir, "fixed.mp4"), bytes);
+  await fs.writeFile(path.join(infoDir, "metadata.json"), JSON.stringify({
+    id: "MSOTJV3L8V1WM",
+    size: bytes.length,
+    ext: "mp4",
+    folders: ["MSOSVPR2743KV"],
+    isDeleted: false,
+  }));
+  process.env.VIDEO_STUDIO_EAGLE_LIBRARY_ROOT = root;
+
+  let infoCalls = 0;
+  const eagleApi = http.createServer((req, res) => {
+    infoCalls += 1;
+    res.statusCode = 500;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ status: "error", data: "File does not exist." }));
+  });
+  await new Promise((resolve) => eagleApi.listen(0, "127.0.0.1", resolve));
+  const options = {
+    eagleApiBase: `http://127.0.0.1:${eagleApi.address().port}/api`,
+    eagleItemInfoAttempts: 1,
+  };
+  const mediaServer = http.createServer((req, res) => serveEagleMedia(req, res, options));
+  await new Promise((resolve) => mediaServer.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    if (previousRoot === undefined) delete process.env.VIDEO_STUDIO_EAGLE_LIBRARY_ROOT;
+    else process.env.VIDEO_STUDIO_EAGLE_LIBRARY_ROOT = previousRoot;
+    await new Promise((resolve) => mediaServer.close(resolve));
+    await new Promise((resolve) => eagleApi.close(resolve));
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  const response = await fetch(`http://127.0.0.1:${mediaServer.address().port}/api/eagle-media/MSOTJV3L8V1WM`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "video/mp4");
+  assert.equal(await response.text(), bytes.toString());
+  assert.equal(infoCalls, 0);
+});
+
 test("Eagle item remains readable after moving to another folder", async (t) => {
   const previousRoot = process.env.VIDEO_STUDIO_EAGLE_LIBRARY_ROOT;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "eagle-moved-item-test-"));
