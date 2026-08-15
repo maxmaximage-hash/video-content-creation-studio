@@ -622,6 +622,29 @@ test("逐字稿直接进入正文且保留正文复制按钮", async ({ page, re
   await expect(card.getByRole("button", { name: "复制全文", exact: true })).toBeEnabled();
 });
 
+test("灵感卡片不展示播放数据", async ({ page, request }) => {
+  const response = await request.post("/api/library", {
+    data: {
+      categories: ["认知"],
+      inspirations: [{
+        ...inspirations[0],
+        id: "I000904",
+        title: "播放数据隐藏测试",
+        stats: { views: "12.3万" },
+      }],
+      projects: [],
+      archive: [],
+      activeProject: null,
+    },
+  });
+  expect(response.ok()).toBeTruthy();
+
+  await page.goto("/");
+  const card = page.locator('[data-inspiration-id="I000904"]');
+  await expect(card).toBeVisible();
+  await expect(card.locator(".card-extended-metrics")).toHaveCount(0);
+});
+
 test("视频灵感预览默认开声，用户可手动关闭", async ({ page, request }) => {
   await page.addInitScript(() => {
     const playing = new WeakSet();

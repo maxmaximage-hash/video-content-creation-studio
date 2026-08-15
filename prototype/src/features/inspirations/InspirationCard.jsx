@@ -254,7 +254,6 @@ export function InspirationCard({
     { key: "shares", label: "转发", Icon: Share2 },
   ].map((metric) => ({ ...metric, value: formatMetric(item.stats?.[metric.key]) })).filter((metric) => metric.value);
   const extendedMetrics = [
-    ["播放", item.stats?.views],
     ["弹幕", item.stats?.danmaku],
     ["投币", item.stats?.coins],
   ].map(([label, value]) => [label, formatMetric(value)]).filter(([, value]) => value);
