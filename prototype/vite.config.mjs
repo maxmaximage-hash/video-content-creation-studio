@@ -39,6 +39,7 @@ import {
   stripContentFromLibrary,
 } from "./server/library-hard-delete.mjs";
 import { createTranscriptionService } from "./server/transcription-service.mjs";
+import { createMobileInboxService } from "./server/mobile-inbox-service.mjs";
 import { createProjectIndex, moveProjectIndex, removeProjectIndex } from "./server/project-index.mjs";
 import {
   isPathInside,
@@ -89,6 +90,7 @@ const currentBuild = buildMetadata();
 const extractionScheduler = createPlatformTaskScheduler();
 const profileScanJobs = new Map();
 const transcriptionService = createTranscriptionService({ projectRoot });
+const mobileInboxService = createMobileInboxService();
 const discardedExtractionIds = new Set();
 const deletionCleanupStates = new Map();
 const deletionCleanupTasks = new Map();
@@ -3379,6 +3381,110 @@ export async function deleteInspirationContentUnit(payload, requestSessionId, ex
   return deleteContentUnitPermanently({ ...payload, id: contentId }, requestSessionId, expectedRevision, libraryManager);
 }
 
+async function executeExtractionRequest(payload, libraryManager, authManager) {
+  const queueKey = platformKey(payload.platform) || platformKey(firstUrl(payload.url));
+  const executeExtraction = async () => {
+    let result = await extractContent(payload, libraryManager, authManager);
+    result = await addTranscription(result, payload, libraryManager);
+    if (payload.id && !payload.repairMissingOnly && !result.library && !result.discarded) {
+      const committed = ["success", "partial"].includes(result.parseState)
+        ? await commitInspirationExtraction({
+            libraryManager,
+            sessionId: payload.sessionId,
+            contentId: payload.id,
+            generation: payload.generation,
+            extraction: result,
+          })
+        : await commitInspirationRefreshResult({
+            libraryManager,
+            sessionId: payload.sessionId,
+            contentId: payload.id,
+            generation: payload.generation,
+            extraction: result,
+          });
+      result.discarded = Boolean(committed?.discarded);
+      result.library = committed?.library;
+    }
+    return result;
+  };
+  return queueKey
+    ? extractionScheduler.run({
+        platform: queueKey,
+        sessionId: payload.sessionId,
+        contentId: payload.id || firstUrl(payload.url),
+        generation: payload.generation,
+      }, executeExtraction)
+    : executeExtraction();
+}
+
+function mobileInboxRemoteState(result = {}) {
+  if (["waiting_login", "waiting_verification"].includes(result.parseState)) return result.parseState;
+  return ["success", "partial"].includes(result.parseState) ? "success" : "failed";
+}
+
+export async function syncMobileInbox({
+  service,
+  libraryManager,
+  authManager,
+  sessionId,
+  limit = 5,
+  ingest = ingestInspiration,
+  extract = executeExtractionRequest,
+}) {
+  const storage = await libraryManager.requireWritable(sessionId);
+  const claimed = await service.claim(limit);
+  const outcomes = [];
+  let latestLibrary = null;
+  for (const task of claimed.tasks || []) {
+    try {
+      const ingested = await ingest({
+        rawText: task.sourceUrl,
+        intake: {
+          channel: "mobile",
+          submittedAt: task.createdAt || new Date().toISOString(),
+          batchId: task.id,
+        },
+      }, sessionId, libraryManager);
+      const item = ingested.item;
+      if (!item?.id) throw apiError("手机链接未生成灵感卡片", 500);
+      let capture = null;
+      if (!ingested.existing || ["extracting", "failed", "waiting_login", "waiting_verification"].includes(item.parseState)) {
+        capture = await extract({
+          id: item.id,
+          url: task.sourceUrl,
+          sessionId,
+          generation: item.generation,
+          // 手机收集只完成公开数据与媒体扒取；逐字稿由用户在卡片中按需触发。
+          transcribe: false,
+        }, libraryManager, authManager);
+        latestLibrary = capture.library || latestLibrary;
+      }
+      const state = capture ? mobileInboxRemoteState(capture) : "success";
+      await service.complete({
+        id: task.id,
+        state,
+        contentId: item.id,
+        errorCode: capture?.errorCode || "",
+        errorMessage: state === "failed" ? (capture?.parseStatus || "采集失败") : "",
+      });
+      outcomes.push({ id: task.id, contentId: item.id, state, existing: Boolean(ingested.existing) });
+    } catch (error) {
+      await service.complete({
+        id: task.id,
+        state: "failed",
+        errorCode: error.code || "MOBILE_INGEST_FAILED",
+        errorMessage: String(error.message || "手机链接写入失败"),
+      }).catch(() => {});
+      outcomes.push({ id: task.id, state: "failed", error: String(error.message || "手机链接写入失败") });
+    }
+  }
+  return {
+    outcomes,
+    library: latestLibrary || await libraryManager.readLibrary(),
+    storage,
+  };
+}
+
 function installLibraryApi(server, libraryManager, options = {}) {
   const authManager = options.authManager;
   let resumedCleanupLibraryDir = "";
@@ -3415,7 +3521,7 @@ function installLibraryApi(server, libraryManager, options = {}) {
           await serveEagleMedia(req, res, options);
           return;
         }
-        if (!req.url?.startsWith("/api/library") && !req.url?.startsWith("/api/content/") && !req.url?.startsWith("/api/content-ids") && !req.url?.startsWith("/api/extract") && !req.url?.startsWith("/api/profile-scans") && !req.url?.startsWith("/api/transcription/") && !req.url?.startsWith("/api/covers") && !req.url?.startsWith("/api/project-media") && !req.url?.startsWith("/api/project-actions") && !req.url?.startsWith("/api/project-assets/status") && !req.url?.startsWith("/api/projects/") && !req.url?.startsWith("/api/eagle-items/") && !req.url?.startsWith("/api/auth/") && !req.url?.startsWith("/api/inspirations/")) return next();
+        if (!req.url?.startsWith("/api/library") && !req.url?.startsWith("/api/content/") && !req.url?.startsWith("/api/content-ids") && !req.url?.startsWith("/api/extract") && !req.url?.startsWith("/api/profile-scans") && !req.url?.startsWith("/api/transcription/") && !req.url?.startsWith("/api/covers") && !req.url?.startsWith("/api/project-media") && !req.url?.startsWith("/api/project-actions") && !req.url?.startsWith("/api/project-assets/status") && !req.url?.startsWith("/api/projects/") && !req.url?.startsWith("/api/eagle-items/") && !req.url?.startsWith("/api/auth/") && !req.url?.startsWith("/api/inspirations/") && !req.url?.startsWith("/api/mobile-inbox")) return next();
         res.setHeader("content-type", "application/json; charset=utf-8");
         try {
           if (req.url.startsWith("/api/eagle-items/")) {
@@ -3643,6 +3749,101 @@ function installLibraryApi(server, libraryManager, options = {}) {
             res.end(JSON.stringify(await authManager.open(payload)));
             return;
           }
+          if (req.url.startsWith("/api/mobile-inbox")) {
+            const requestUrl = new URL(req.url, "http://local");
+            const service = options.mobileInboxService || mobileInboxService;
+            if (requestUrl.pathname === "/api/mobile-inbox/status" && req.method === "GET") {
+              const status = await service.status();
+              if (!status.configured) {
+                res.end(JSON.stringify({ ...status, connected: false, submissions: [], pairings: [], devices: [] }));
+                return;
+              }
+              try {
+                const dashboard = typeof service.dashboard === "function"
+                  ? await service.dashboard()
+                  : null;
+                const [submissions, pairings, devices] = dashboard
+                  ? [dashboard, dashboard, dashboard]
+                  : await Promise.all([
+                      service.listSubmissions(),
+                      service.listPairings(),
+                      service.listDevices(),
+                    ]);
+                res.end(JSON.stringify({
+                  ...status,
+                  connected: true,
+                  device: devices.currentDevice || status.device,
+                  submissions: submissions.submissions || [],
+                  pairings: pairings.pairings || [],
+                  devices: devices.devices || [],
+                }));
+              } catch (error) {
+                res.end(JSON.stringify({
+                  ...status,
+                  connected: false,
+                  error: error.message,
+                  errorCode: error.code || "MOBILE_INBOX_UNAVAILABLE",
+                  submissions: [],
+                  pairings: [],
+                  devices: [],
+                }));
+              }
+              return;
+            }
+            if (requestUrl.pathname === "/api/mobile-inbox/setup/initialize" && req.method === "POST") {
+              const payload = await readJsonBody(req);
+              res.statusCode = 201;
+              res.end(JSON.stringify(await service.initialize(payload)));
+              return;
+            }
+            if (requestUrl.pathname === "/api/mobile-inbox/setup/join" && req.method === "POST") {
+              const payload = await readJsonBody(req);
+              res.statusCode = 201;
+              res.end(JSON.stringify(await service.join(payload)));
+              return;
+            }
+            if (requestUrl.pathname === "/api/mobile-inbox/devices/activation" && req.method === "POST") {
+              const payload = await readJsonBody(req);
+              res.statusCode = 201;
+              res.end(JSON.stringify(await service.createActivation(payload)));
+              return;
+            }
+            const deviceRevokeMatch = requestUrl.pathname.match(/^\/api\/mobile-inbox\/devices\/([^/]+)\/revoke$/);
+            if (deviceRevokeMatch && req.method === "POST") {
+              res.end(JSON.stringify(await service.revokeDevice(decodeURIComponent(deviceRevokeMatch[1]))));
+              return;
+            }
+            if (requestUrl.pathname === "/api/mobile-inbox/pairings" && req.method === "POST") {
+              const payload = await readJsonBody(req);
+              res.end(JSON.stringify(await service.createPairing(payload)));
+              return;
+            }
+            const pairingMatch = requestUrl.pathname.match(/^\/api\/mobile-inbox\/pairings\/([^/]+)\/revoke$/);
+            if (pairingMatch && req.method === "POST") {
+              res.end(JSON.stringify(await service.revokePairing(decodeURIComponent(pairingMatch[1]))));
+              return;
+            }
+            const retryMatch = requestUrl.pathname.match(/^\/api\/mobile-inbox\/submissions\/([^/]+)\/retry$/);
+            if (retryMatch && req.method === "POST") {
+              res.end(JSON.stringify(await service.retry(decodeURIComponent(retryMatch[1]))));
+              return;
+            }
+            if (requestUrl.pathname === "/api/mobile-inbox/sync" && req.method === "POST") {
+              const payload = await readJsonBody(req);
+              const result = await syncMobileInbox({
+                service,
+                libraryManager,
+                authManager,
+                sessionId: req.headers["x-library-session-id"] || "",
+                limit: payload.limit,
+              });
+              res.end(JSON.stringify(result));
+              return;
+            }
+            res.statusCode = 404;
+            res.end(JSON.stringify({ error: "找不到手机链接收集箱接口" }));
+            return;
+          }
           if (req.url.startsWith("/api/inspirations/")) {
             const requestUrl = new URL(req.url, "http://local");
             if (requestUrl.pathname === "/api/inspirations/ingest") {
@@ -3790,41 +3991,9 @@ function installLibraryApi(server, libraryManager, options = {}) {
               return;
             }
             const payload = await readJsonBody(req);
-            const queueKey = platformKey(payload.platform) || platformKey(firstUrl(payload.url));
             payload.sessionId ||= req.headers["x-library-session-id"] || "";
             await libraryManager.requireWritable(payload.sessionId);
-            const executeExtraction = async () => {
-              let result = await extractContent(payload, libraryManager, authManager);
-              result = await addTranscription(result, payload, libraryManager);
-              if (payload.id && !payload.repairMissingOnly && !result.library && !result.discarded) {
-                const committed = ["success", "partial"].includes(result.parseState)
-                  ? await commitInspirationExtraction({
-                      libraryManager,
-                      sessionId: payload.sessionId,
-                      contentId: payload.id,
-                      generation: payload.generation,
-                      extraction: result,
-                    })
-                  : await commitInspirationRefreshResult({
-                      libraryManager,
-                      sessionId: payload.sessionId,
-                      contentId: payload.id,
-                      generation: payload.generation,
-                      extraction: result,
-                    });
-                result.discarded = Boolean(committed?.discarded);
-                result.library = committed?.library;
-              }
-              return result;
-            };
-            const result = queueKey
-              ? await extractionScheduler.run({
-                  platform: queueKey,
-                  sessionId: payload.sessionId,
-                  contentId: payload.id || firstUrl(payload.url),
-                  generation: payload.generation,
-                }, executeExtraction)
-              : await executeExtraction();
+            const result = await executeExtractionRequest(payload, libraryManager, authManager);
             res.end(JSON.stringify(result));
             return;
           }

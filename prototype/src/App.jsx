@@ -9,6 +9,7 @@ import { CreationPage } from "./pages/creation/CreationPage.jsx";
 import { InspirationsPage } from "./pages/inspirations/InspirationsPage.jsx";
 import { QueuePage } from "./pages/queue/QueuePage.jsx";
 import { ArchivePage } from "./pages/archive/ArchivePage.jsx";
+import { MobileInboxPage } from "./pages/mobile-inbox/MobileInboxPage.jsx";
 import { projectPrimaryCopy } from "./pages/queue/content-variants.js";
 import {
   clearProjectContent,
@@ -46,6 +47,7 @@ import {
   Play,
   Plus,
   Tags,
+  Smartphone,
   Volume2,
   VolumeX,
   X,
@@ -58,6 +60,7 @@ const appBuildLabel = `${appVersionLabel} · ${__APP_COMMIT__}${__APP_DIRTY__ ? 
 
 const navItems = [
   { id: "inspirations", label: "灵感库", icon: Lightbulb },
+  { id: "mobile-inbox", label: "手机收集", icon: Smartphone },
   { id: "creation", label: "编辑", icon: PencilLine },
   { id: "queue", label: "创作台", icon: Inbox },
   { id: "archive", label: "归档库", icon: FolderOpen },
@@ -816,6 +819,7 @@ export function App() {
   const deletingProjectIdsRef = useRef(new Set());
   const creatingContentIdsRef = useRef(new Set());
   const movingProjectIdsRef = useRef(new Set());
+  const mobileInboxSyncInFlightRef = useRef(false);
   const projectIndexMutationQueueRef = useRef(Promise.resolve());
   const inspirationItemsRef = useRef(inspirationItems);
   const pendingReferencePatchesRef = useRef(new Map());
@@ -968,6 +972,48 @@ export function App() {
     referencePatchTimersRef.current.clear();
     pendingReferencePatchesRef.current.clear();
   }, []);
+
+  useEffect(() => {
+    if (!libraryLoaded || !libraryWritable || !storage?.sessionId) return undefined;
+    let cancelled = false;
+    const syncMobileInbox = async () => {
+      if (cancelled || mobileInboxSyncInFlightRef.current) return;
+      mobileInboxSyncInFlightRef.current = true;
+      try {
+        const statusResponse = await fetch("/api/mobile-inbox/status");
+        const mobileStatus = await statusResponse.json();
+        if (!statusResponse.ok || !mobileStatus.connected || cancelled) return;
+        const response = await fetch("/api/mobile-inbox/sync", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-library-session-id": storage.sessionId,
+          },
+          body: JSON.stringify({ limit: 5 }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.library || cancelled) return;
+        const library = normalizeLibrary(result.library);
+        setInspirationItems(library.inspirations);
+        if (library.storage) setStorage(library.storage);
+        if (library.revision) {
+          libraryRevisionRef.current = library.revision;
+          setLibraryRevision(library.revision);
+        }
+      } catch {
+        // Offline computers and NAS mounts are expected to recover later. D1 keeps
+        // pending links until a writable, authorized desktop can claim them.
+      } finally {
+        mobileInboxSyncInFlightRef.current = false;
+      }
+    };
+    void syncMobileInbox();
+    const timer = window.setInterval(syncMobileInbox, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [libraryLoaded, libraryWritable, storage?.sessionId]);
 
   useEffect(() => {
     if (!libraryLoaded || !libraryWritable) return undefined;
@@ -1938,6 +1984,15 @@ export function App() {
     );
   } else if (!storage) {
     main = <ClosedLibraryWorkspace busy={libraryBusy} onAction={requestLibraryAction} />;
+  } else if (page === "mobile-inbox") {
+    main = (
+      <MobileInboxPage
+        storage={storage}
+        libraryWritable={libraryWritable}
+        onApplyLibrary={applyLibraryData}
+        notify={notify}
+      />
+    );
   } else if (page === "creation") {
     main = (
       <CreationPage

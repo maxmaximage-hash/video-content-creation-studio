@@ -1,13 +1,14 @@
-import net from "node:net";
+import nodeNet from "node:net";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net as electronNet, shell } from "electron";
 import { preview } from "vite";
 import { libraryApiPlugin } from "../vite.config.mjs";
 import { DEFAULT_LIBRARY_NAME } from "../server/library-manager.mjs";
 import { APP_PRODUCT_NAME, LEGACY_USER_DATA_NAME } from "./app-identity.mjs";
 import { resolveDragFile } from "./file-drag.mjs";
 import { createReusableServerLifecycle } from "./server-lifecycle.mjs";
+import { createMobileInboxService } from "../server/mobile-inbox-service.mjs";
 
 const APP_NAME = APP_PRODUCT_NAME;
 const smokeTest = process.argv.includes("--smoke-test");
@@ -86,7 +87,7 @@ async function chooseLibraryPath({ action, currentDir }) {
 
 function reservePort() {
   return new Promise((resolve, reject) => {
-    const server = net.createServer();
+    const server = nodeNet.createServer();
     server.unref();
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => {
@@ -103,11 +104,17 @@ async function launchLocalAppServer() {
   activeLibraryDir = initialLibraryDir;
   process.env.VIDEO_CONTENT_AUTH_ROOT ||= path.join(app.getPath("userData"), "auth-browser");
   process.env.VIDEO_STUDIO_RUNTIME_ROOT ||= path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), "runtime");
+  // The mobile inbox must honor macOS proxy settings. Electron's network stack
+  // follows the active system proxy, while Node's global fetch connects directly.
+  const mobileInboxService = createMobileInboxService({
+    fetchImpl: (...args) => electronNet.fetch(...args),
+  });
   let apiPlugin;
   apiPlugin = libraryApiPlugin({
     initialLibraryDir,
     allowImplicitCreate: smokeTest,
     chooseLibraryPath,
+    mobileInboxService,
     onStateChange: async (state) => {
       const storage = apiPlugin.getLibraryStorage();
       activeLibraryDir = storage?.libraryDir || null;

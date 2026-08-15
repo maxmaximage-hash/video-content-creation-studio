@@ -57,7 +57,11 @@
       {
         "from": "runtime",
         "to": "runtime",
-        "filter": ["**/*", "!.cache/**/*", "!.tools/**/*"]
+        "filter": [
+          "**/*",
+          "!.cache/**/*",
+          "!.tools/**/*"
+        ]
       }
     ],
     "mac": {
@@ -75,6 +79,7 @@
     "@vitejs/plugin-react": "5.0.4",
     "lucide-react": "^1.25.0",
     "playwright": "^1.61.1",
+    "qrcode.react": "^4.2.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "vite": "6.4.2"

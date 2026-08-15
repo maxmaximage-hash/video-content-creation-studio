@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "video-hub-mobile-inbox",
+  "main": "worker.js",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "MOBILE_INBOX_DB",
+      "database_name": "video-hub-mobile-inbox",
+      "database_id": "f001a09c-db88-4523-857f-9d0ed8e128be"
+    }
+  ]
+}

@@ -324,6 +324,7 @@ export function InspirationCard({
         <div className="media-topline">
           <div className="media-badges">
             <span className={`status-pill ${platformTone[item.platform] || "neutral"}`}>{item.platform}</span>
+            {item.intake?.channel === "mobile" && <span className="image-count-badge">手机端来源</span>}
             {images.length > 1 && <span className="image-count-badge"><ImagePlus size={12} />{activeImage + 1}/{images.length}</span>}
           </div>
           <details className="card-overflow">
