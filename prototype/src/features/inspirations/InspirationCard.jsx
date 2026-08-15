@@ -230,7 +230,23 @@ export function InspirationCard({
       return next;
     });
   };
-  const activeMedia = images.length
+  const activeMedia = isVideoContent
+    ? {
+      ...item,
+      src: "",
+      localPath: "",
+      cover: "",
+      coverLocalPath: item.coverLocalPath || versionedLocalPath,
+      coverUrl: item.coverUrl || activeImageRecord?.sourceUrl || "",
+      videoUrl: item.videoUrl,
+      videoPreviewUrl: item.videoPreviewUrl,
+      videoLocalPath: item.videoLocalPath,
+      eagleItemId: item.eagleItemId,
+      eagleFolderId: item.eagleFolderId,
+      onMediaMissing: markActiveImageMissing,
+      onMediaLoaded: markActiveImageLoaded,
+    }
+    : images.length
     ? {
       ...item,
       src: "",

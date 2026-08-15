@@ -593,6 +593,8 @@ function MediaPreview({ item, compact = false }) {
     const video = videoRef.current;
     if (!video) return;
     video.pause();
+    setIsPlaying(false);
+    setVideoReady(false);
     try {
       video.currentTime = 0;
       setCurrentTime(0);

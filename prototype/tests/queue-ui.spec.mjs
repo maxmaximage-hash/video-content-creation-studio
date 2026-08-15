@@ -372,7 +372,7 @@ test("正文规整后立即完成仍归档最新内容", async ({ page, request 
 
 test("card hierarchy, editable copy, large cover surfaces and button isolation", async ({ page, request }) => {
   await openQueue(page);
-  await expect(page.locator(".brand-copy span")).toHaveText("V1.9");
+  await expect(page.locator(".brand-copy span")).toHaveText("V1.10");
 
   const firstCard = page.locator('[data-project-id="C000127"]');
   await expect(firstCard.locator(".queue-card-number")).toHaveText("01");
@@ -672,6 +672,7 @@ test("视频灵感预览默认开声，用户可手动关闭", async ({ page, re
         id: "I000901",
         contentType: "video",
         title: "默认开声的视频灵感",
+        coverLocalPath: "/assets/covers/creator-desk.png",
         videoUrl: "https://video.example/temporary.mp4",
         videoPreviewUrl: "/library-proxy/media?url=https%3A%2F%2Fvideo.example%2Ftemporary.mp4",
         videoLocalPath: "/assets/covers/coffee-alley.png",
@@ -707,6 +708,7 @@ test("视频灵感预览默认开声，用户可手动关闭", async ({ page, re
   expect(mediaShape).toEqual({ cardWidth: "", mediaAspect: "3 / 4", objectPosition: "50% 50%" });
   const mediaPreview = videoCard.locator(".media-preview");
   const previewVideo = videoCard.locator("video");
+  await expect(videoCard.locator(".media-preview > img")).toHaveAttribute("src", "/assets/covers/creator-desk.png");
   await expect(mediaPreview).not.toHaveClass(/video-ready/);
   await expect(videoCard.locator(".media-preview > img")).toHaveCSS("opacity", "1");
   await previewVideo.dispatchEvent("loadeddata");
@@ -718,6 +720,11 @@ test("视频灵感预览默认开声，用户可手动关闭", async ({ page, re
   await previewVideo.dispatchEvent("playing");
   await expect(mediaPreview).toHaveClass(/video-ready/);
   await expect(videoCard.getByRole("button", { name: "暂停预览", exact: true })).toBeVisible();
+  await mediaPreview.hover();
+  await videoCard.locator("h3").hover();
+  await expect(mediaPreview).not.toHaveClass(/video-ready/);
+  await expect(videoCard.locator(".media-preview > img")).toHaveCSS("opacity", "1");
+  await expect(previewVideo).toHaveCSS("opacity", "0");
   await previewVideo.dispatchEvent("pause");
   await expect(videoCard.getByRole("button", { name: "播放预览", exact: true })).toBeVisible();
   await page.reload();
