@@ -36,7 +36,7 @@ function effectiveCaptureState(item) {
     : item?.parseState;
 }
 
-function LinkCapture({ categories, onAdd }) {
+function LinkCapture({ categories, onAdd, storage, onApplyLibrary, onBatchChange, notify, authStatus, onOpenAuth, onRefreshAuth }) {
   const [url, setUrl] = useState("");
   const [category, setCategory] = useState("");
   const [adding, setAdding] = useState(false);
@@ -61,6 +61,7 @@ function LinkCapture({ categories, onAdd }) {
   };
 
   return (
+    <div className="inspiration-capture-stack">
     <section className="link-capture real-capture" aria-label="添加真实灵感链接">
       <div className="capture-icon"><Link2 size={20} /></div>
       <textarea
@@ -73,7 +74,7 @@ function LinkCapture({ categories, onAdd }) {
           }
         }}
         placeholder="粘贴一条或多条真实链接，批量时一行一条（⌘⏎ 开始）"
-        aria-label="真实内容链接"
+          aria-label="主页或作品链接"
       />
       <select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="入库分类">
         <option value="">未分类</option>
@@ -84,11 +85,27 @@ function LinkCapture({ categories, onAdd }) {
         {adding ? `正在处理 ${links.length} 条` : links.length > 1 ? `批量添加 ${links.length} 条` : "添加灵感"}
       </button>
     </section>
+    <ProfileBatchCapture
+      storage={storage}
+      onApplyLibrary={onApplyLibrary}
+      onBatchChange={onBatchChange}
+      notify={notify}
+      authStatus={authStatus}
+      onOpenAuth={onOpenAuth}
+      onRefreshAuth={onRefreshAuth}
+      captureValue={url}
+      onCaptureValueChange={setUrl}
+      category={category}
+      hideInput
+    />
+    </div>
   );
 }
 
-function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, authStatus, onOpenAuth, onRefreshAuth }) {
-  const [profileUrl, setProfileUrl] = useState("");
+function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, authStatus, onOpenAuth, onRefreshAuth, captureValue, onCaptureValueChange, category = "", hideInput = false }) {
+  const [internalProfileUrl, setInternalProfileUrl] = useState("");
+  const profileUrl = captureValue ?? internalProfileUrl;
+  const setProfileUrl = onCaptureValueChange || setInternalProfileUrl;
   const [transcribe, setTranscribe] = useState(true);
   const [batch, setBatch] = useState(null);
   const [starting, setStarting] = useState(false);
@@ -187,7 +204,7 @@ function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, a
           "content-type": "application/json",
           "x-library-session-id": storage?.sessionId || "",
         },
-        body: JSON.stringify({ profileUrl, autoCollect: true, transcribe }),
+          body: JSON.stringify({ profileUrl, category, autoCollect: true, transcribe }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "主页扫描启动失败");
@@ -246,13 +263,15 @@ function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, a
         </div>
       ) : null}
       <div className="profile-batch-form">
-        <input
-          value={profileUrl}
-          onChange={(event) => setProfileUrl(event.target.value)}
-          onKeyDown={(event) => event.key === "Enter" && start()}
-          placeholder="粘贴平台主页、单条作品或完整分享文字"
-          aria-label="主页或作品链接"
-        />
+        {!hideInput ? (
+          <input
+            value={profileUrl}
+            onChange={(event) => setProfileUrl(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && start()}
+            placeholder="粘贴平台主页、单条作品或完整分享文字"
+            aria-label="主页或作品链接"
+          />
+        ) : <span className="profile-batch-shared-input">使用上方链接输入框扫描主页或单条作品</span>}
         <button type="button" className="quiet-button" onClick={start} disabled={!profileUrl.trim() || starting}>
           {starting ? <RefreshCw size={16} className="spin" /> : <Search size={16} />}
           {starting ? "正在启动" : "扫描并自动扒取"}
@@ -710,8 +729,9 @@ export function InspirationsPage({
         setSidebarOpen,
       })}
 
-      <LinkCapture categories={categories} onAdd={addLink} />
-      <ProfileBatchCapture
+      <LinkCapture
+        categories={categories}
+        onAdd={addLink}
         storage={storage}
         onApplyLibrary={onApplyLibrary}
         onBatchChange={setActiveBatch}

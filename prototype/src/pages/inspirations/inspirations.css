@@ -16,6 +16,17 @@
   min-height: 240px;
 }
 
+.inspiration-capture-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.profile-batch-shared-input {
+  flex: 1;
+  color: #858b96;
+  font-size: 12px;
+}
+
 .profile-batch-capture {
   display: grid;
   gap: 12px;
