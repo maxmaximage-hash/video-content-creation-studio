@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 const DEFAULT_EAGLE_API_BASE = "http://127.0.0.1:41595/api";
+const DEFAULT_EAGLE_LIBRARY_ROOT = "/Volumes/团队文件-MAX线上协作中台/引力环球视频.library";
 const INFO_DIR_CACHE = new Map();
 
 export class EagleUnavailableError extends Error {
@@ -16,6 +17,94 @@ export class EagleUnavailableError extends Error {
 
 function apiBase(options = {}) {
   return String(options.eagleApiBase || process.env.VIDEO_STUDIO_EAGLE_API_BASE || process.env.EAGLE_API_BASE || DEFAULT_EAGLE_API_BASE).replace(/\/+$/, "");
+}
+
+function normalizedLibraryPath(value = "") {
+  const raw = String(value || "").trim();
+  return raw ? path.resolve(raw).replace(/\/+$/, "") : "";
+}
+
+export function configuredEagleLibraryRoot(options = {}) {
+  return normalizedLibraryPath(
+    options.eagleLibraryRoot
+      || process.env.VIDEO_STUDIO_EAGLE_LIBRARY_ROOT
+      || process.env.EAGLE_LIBRARY_ROOT
+      || DEFAULT_EAGLE_LIBRARY_ROOT,
+  );
+}
+
+function eagleLibraryPathFromInfo(result = {}) {
+  return normalizedLibraryPath(
+    result?.data?.library?.path
+      || result?.data?.libraryPath
+      || result?.data?.path
+      || "",
+  );
+}
+
+function folderTreeContains(folders = [], targetId = "") {
+  for (const folder of Array.isArray(folders) ? folders : []) {
+    if (String(folder?.id || "") === String(targetId || "")) return true;
+    if (folderTreeContains(folder?.children, targetId)) return true;
+  }
+  return false;
+}
+
+/**
+ * Eagle's local API always imports into the library currently open in Eagle.
+ * Folder IDs are library-scoped, and Eagle accepts an unknown folderId by
+ * importing the item as unfiled. Make the expected shared library active
+ * before every Video Hub import so a user's unrelated Eagle session cannot
+ * silently create orphan assets in the wrong library.
+ */
+export async function ensureEagleLibrary({ folderId = "", options = {} } = {}) {
+  const expectedPath = configuredEagleLibraryRoot(options);
+  if (!expectedPath) throw new EagleUnavailableError("Eagle 视频资料库路径未配置", 500);
+  let stat;
+  try {
+    stat = await fs.stat(expectedPath);
+  } catch {
+    throw new EagleUnavailableError("Eagle 视频资料库当前不可访问，请检查 NAS 挂载", 503);
+  }
+  if (!stat.isDirectory()) throw new EagleUnavailableError("Eagle 视频资料库路径无效", 500);
+
+  let info = await eagleApiJson("/library/info", { options });
+  let activePath = eagleLibraryPathFromInfo(info);
+  let switched = false;
+  if (activePath !== expectedPath) {
+    await eagleApiJson("/library/switch", {
+      method: "POST",
+      body: { libraryPath: expectedPath },
+      options,
+    });
+    switched = true;
+    // Eagle restarts its local API while switching a library. Treat the brief
+    // connection refusal as part of the switch instead of surfacing a false
+    // failure to the capture scheduler.
+    const maxAttempts = Math.max(1, Number(options.eagleLibrarySwitchAttempts) || 120);
+    const retryDelayMs = Math.max(50, Number(options.eagleLibrarySwitchRetryDelayMs) || 500);
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        info = await eagleApiJson("/library/info", { options });
+        activePath = eagleLibraryPathFromInfo(info);
+        if (activePath === expectedPath) break;
+      } catch (error) {
+        if (attempt === maxAttempts - 1) throw error;
+      }
+      if (attempt < maxAttempts - 1) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+    if (activePath !== expectedPath) {
+      throw new EagleUnavailableError("Eagle 未能切换到视频灵感资料库，请稍后重试", 503);
+    }
+  }
+
+  if (folderId) {
+    const folders = await eagleApiJson("/folder/list", { options });
+    if (!folderTreeContains(folders?.data, folderId)) {
+      throw new EagleUnavailableError("Eagle 视频灵感库文件夹不存在或资料库版本不匹配", 409);
+    }
+  }
+  return { activePath, expectedPath, switched };
 }
 
 function validateEagleItemId(value = "") {
@@ -136,7 +225,7 @@ function eagleLibraryRoots() {
     process.env.EAGLE_LIBRARY_ROOT,
   ].filter(Boolean);
   const defaultRoots = [
-    "/Volumes/团队文件-MAX线上协作中台/引力环球视频.library",
+    DEFAULT_EAGLE_LIBRARY_ROOT,
     "/Volumes/团队文件-MAX线上协作中台/引力环球.library",
     path.join(os.homedir(), "引力环球/引力环球.library"),
   ];

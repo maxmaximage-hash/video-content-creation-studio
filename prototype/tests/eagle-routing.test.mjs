@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { eagleItemInfo, importPathToEagle, serveEagleMedia, setEagleAnnotation } from "../server/eagle-adapter.mjs";
+import { eagleItemInfo, ensureEagleLibrary, importPathToEagle, serveEagleMedia, setEagleAnnotation } from "../server/eagle-adapter.mjs";
 import { eagleFolderIdForAsset } from "../src/services/eagle-asset-routing.js";
 import { eagleMediaSource } from "../src/services/eagle-media.js";
 import { eagleItemBelongsToFolder } from "../server/inspiration-eagle-integrity.mjs";
@@ -64,6 +64,126 @@ test("Eagle V1 import is verified by stable item ID and preview keeps only an Ea
   assert.equal(item.id, "MSOTJV3L8V1WM");
   assert.equal(item.folders[0], "MSOSVPR2743KV");
   assert.equal(eagleMediaSource({ eagleItemId: item.id, eagleFolderId: item.folders[0] }), "/api/eagle-media/MSOTJV3L8V1WM");
+});
+
+test("Video Hub switches Eagle to the configured video library before importing", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "eagle-video-library-"));
+  const expectedFolderId = "MSOSVPR2743KV";
+  let activePath = "/tmp/unrelated.library";
+  let switchCalls = 0;
+  const server = http.createServer(async (req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/api/library/info") {
+      res.end(JSON.stringify({ status: "success", data: { library: { path: activePath } } }));
+      return;
+    }
+    if (req.url === "/api/library/switch" && req.method === "POST") {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      switchCalls += 1;
+      activePath = body.libraryPath;
+      res.end(JSON.stringify({ status: "success", data: null }));
+      return;
+    }
+    if (req.url === "/api/folder/list") {
+      res.end(JSON.stringify({ status: "success", data: [{ id: "ROOT", children: [{ id: expectedFolderId, children: [] }] }] }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ status: "error", message: "missing" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const result = await ensureEagleLibrary({
+    folderId: expectedFolderId,
+    options: {
+      eagleApiBase: `http://127.0.0.1:${server.address().port}/api`,
+      eagleLibraryRoot: root,
+      eagleLibrarySwitchAttempts: 2,
+      eagleLibrarySwitchRetryDelayMs: 10,
+    },
+  });
+  assert.equal(result.activePath, root);
+  assert.equal(result.switched, true);
+  assert.equal(switchCalls, 1);
+});
+
+test("Video Hub refuses import when the configured Eagle folder is absent", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "eagle-video-library-mismatch-"));
+  const server = http.createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/api/library/info") {
+      res.end(JSON.stringify({ status: "success", data: { library: { path: root } } }));
+      return;
+    }
+    if (req.url === "/api/folder/list") {
+      res.end(JSON.stringify({ status: "success", data: [] }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ status: "error", message: "missing" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  await assert.rejects(
+    ensureEagleLibrary({
+      folderId: "MSOSVPR2743KV",
+      options: { eagleApiBase: `http://127.0.0.1:${server.address().port}/api`, eagleLibraryRoot: root },
+    }),
+    /文件夹不存在或资料库版本不匹配/,
+  );
+});
+
+test("Eagle library switching tolerates its temporary local API restart", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "eagle-video-library-restart-"));
+  let activePath = "/tmp/unrelated.library";
+  let probeCalls = 0;
+  const server = http.createServer(async (req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/api/library/info") {
+      probeCalls += 1;
+      if (probeCalls === 2) {
+        req.socket.destroy();
+        return;
+      }
+      res.end(JSON.stringify({ status: "success", data: { library: { path: activePath } } }));
+      return;
+    }
+    if (req.url === "/api/library/switch" && req.method === "POST") {
+      activePath = root;
+      res.end(JSON.stringify({ status: "success", data: null }));
+      return;
+    }
+    if (req.url === "/api/folder/list") {
+      res.end(JSON.stringify({ status: "success", data: [{ id: "MSOSVPR2743KV", children: [] }] }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end(JSON.stringify({ status: "error", message: "missing" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const result = await ensureEagleLibrary({
+    folderId: "MSOSVPR2743KV",
+    options: {
+      eagleApiBase: `http://127.0.0.1:${server.address().port}/api`,
+      eagleLibraryRoot: root,
+      eagleLibrarySwitchAttempts: 4,
+      eagleLibrarySwitchRetryDelayMs: 10,
+    },
+  });
+  assert.equal(result.activePath, root);
+  assert.ok(probeCalls >= 3);
 });
 
 test("Eagle item read retries the transient V1 data-field indexing error", async (t) => {

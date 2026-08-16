@@ -48,6 +48,7 @@ import {
   validateReadableLibraryAssetPath,
 } from "./server/path-security.mjs";
 import {
+  ensureEagleLibrary,
   eagleItemInfo,
   eagleItemInfoFromLibrary,
   importPathToEagle,
@@ -2703,6 +2704,7 @@ async function writeTempUploadFile(source, originalName) {
 }
 
 async function verifiedEagleImport({ tempPath, folderId, originalName, contentId, role, accountRole, size, contentType }) {
+  await ensureEagleLibrary({ folderId });
   const imported = await importPathToEagle({
     filePath: tempPath,
     folderId,
