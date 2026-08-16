@@ -125,13 +125,13 @@ test("phone QR prepares a one-use standalone install without iOS focus zoom", as
   const bootstrapHtml = await bootstrap.text();
   assert.equal(bootstrap.status, 200);
   assert.match(bootstrapHtml, /localStorage\.setItem\(storageKey,bootstrapToken\)/);
-  assert.match(bootstrapHtml, /history\.replaceState\(\{\},'', '\/app'\)/);
+  assert.match(bootstrapHtml, /history\.replaceState\(\{\},'', '\/install\/'\+encodeURIComponent\(installTicket\)\)/);
   assert.match(bootstrapHtml, /不需要重复扫码/);
   assert.match(bootstrapHtml, /textarea\{[^}]*font-family:inherit;[^}]*font-size:16px;[^}]*line-height:1\.55/);
   assert.match(bootstrapHtml, /-webkit-text-size-adjust:100%/);
   assert.doesNotMatch(bootstrapHtml, /font:16px\/1\.55 inherit/);
-  assert.doesNotMatch(bootstrapHtml, /maximum-scale|user-scalable=no/);
-  assert.match(bootstrapHtml, /请删掉这个旧图标/);
+  assert.match(bootstrapHtml, /maximum-scale=1,user-scalable=no/);
+  assert.match(bootstrapHtml, /连接这台手机的另一个入口/);
 
   const manifestPath = bootstrapHtml.match(/id="app-manifest" rel="manifest" href="([^"]+)"/)?.[1];
   assert.ok(manifestPath?.startsWith("/manifest.webmanifest?ticket="));
@@ -187,6 +187,63 @@ test("phone QR prepares a one-use standalone install without iOS focus zoom", as
   assert.equal(dashboard.response.status, 200);
   assert.equal(dashboard.data.submissions.length, 1);
   assert.equal(dashboard.data.currentDevice.id, devices.memberDevice.id);
+});
+
+test("one logical phone can add browser and home-screen entries without creating duplicate pairings", async (t) => {
+  const setup = await workerEnvironment();
+  t.after(setup.close);
+  const devices = await provisionTwoDevices(setup.env);
+  const created = await call(setup.env, "/v1/pairings", {
+    method: "POST",
+    token: devices.adminToken,
+    body: { label: "我的手机" },
+  });
+  const pairingId = created.data.pairing.id;
+
+  const handoff = await call(setup.env, `/v1/pairings/${pairingId}/handoff`, {
+    method: "POST",
+    token: devices.adminToken,
+    body: {},
+  });
+  assert.equal(handoff.response.status, 201);
+  assert.equal(handoff.data.handoff.pairingId, pairingId);
+  const handoffUrl = new URL(handoff.data.handoff.mobileUrl);
+  const installTicket = decodeURIComponent(handoffUrl.pathname.slice("/install/".length));
+
+  const browserCredential = await call(setup.env, "/v1/mobile/install/redeem", {
+    method: "POST",
+    body: { installTicket, prepareInstall: true },
+  });
+  assert.equal(browserCredential.response.status, 201);
+  assert.ok(browserCredential.data.install.installUrl.includes("/install/"));
+
+  const nextTicket = decodeURIComponent(new URL(browserCredential.data.install.installUrl).pathname.slice("/install/".length));
+  const homeCredential = await call(setup.env, "/v1/mobile/install/redeem", {
+    method: "POST",
+    body: { installTicket: nextTicket },
+  });
+  assert.equal(homeCredential.response.status, 201);
+
+  const status = await call(setup.env, "/v1/mobile/status", {
+    method: "POST",
+    body: { pairingToken: homeCredential.data.pairingToken },
+  });
+  assert.equal(status.response.status, 200);
+
+  const pairings = await call(setup.env, "/v1/pairings", { token: devices.adminToken });
+  assert.equal(pairings.data.pairings.length, 1);
+  assert.equal(pairings.data.pairings[0].id, pairingId);
+  assert.equal(Number(pairings.data.pairings[0].credentialCount), 2);
+  assert.ok(pairings.data.pairings[0].lastSeenAt);
+
+  const secondPhone = await call(setup.env, "/v1/pairings", {
+    method: "POST",
+    token: devices.adminToken,
+    body: { label: "我的手机 2" },
+  });
+  assert.equal(secondPhone.response.status, 201);
+  const afterSecondPhone = await call(setup.env, "/v1/pairings", { token: devices.adminToken });
+  assert.equal(afterSecondPhone.data.pairings.length, 2);
 });
 
 test("expired install tickets fall back to the unpaired app and cannot be redeemed", async (t) => {
@@ -402,6 +459,12 @@ test("local service remembers the paired phone Web App in Keychain and clears it
       else keychain.delete(account);
     },
     fetchImpl: async (url) => {
+      if (url.endsWith("/v1/pairings/pair_phone/handoff")) {
+        return new Response(JSON.stringify({ handoff: {
+          pairingId: "pair_phone",
+          mobileUrl: "https://mobile.example.test/install/short-lived",
+        } }), { status: 201, headers: { "content-type": "application/json" } });
+      }
       if (url.endsWith("/v1/pairings")) {
         return new Response(JSON.stringify({ pairing: {
           id: "pair_phone",
@@ -419,6 +482,10 @@ test("local service remembers the paired phone Web App in Keychain and clears it
   await service.createPairing({ label: "我的手机" });
   const paired = await service.status();
   assert.equal(paired.mobilePairing.webAppUrl, "https://mobile.example.test/app");
+  assert.equal(keychain.get(mobileInboxTestables.accounts.MOBILE_BOOTSTRAP_URL_ACCOUNT).includes("bootstrap-secret"), true);
+
+  const handoff = await service.createPairingHandoff("pair_phone");
+  assert.equal(handoff.handoff.mobileUrl.includes("/install/short-lived"), true);
   assert.equal(keychain.get(mobileInboxTestables.accounts.MOBILE_BOOTSTRAP_URL_ACCOUNT).includes("bootstrap-secret"), true);
 
   await service.revokePairing("pair_phone");

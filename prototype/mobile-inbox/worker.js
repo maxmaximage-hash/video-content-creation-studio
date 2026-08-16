@@ -89,13 +89,26 @@ async function pairingForToken(env, pairingToken) {
   if (!pairingToken) return null;
   const tokenHash = await hash(pairingToken);
   const row = await env.MOBILE_INBOX_DB.prepare(
-    "SELECT * FROM mobile_pairings WHERE token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)",
+    "SELECT p.*, NULL AS credentialId, p.last_seen_at AS credentialLastSeenAt FROM mobile_pairings p WHERE p.token_hash = ? AND p.revoked_at IS NULL AND (p.expires_at IS NULL OR p.expires_at > ?)",
   ).bind(tokenHash, now()).first();
-  if (row) return row;
-  const credentialRow = await env.MOBILE_INBOX_DB.prepare(
-    "SELECT p.* FROM mobile_pairing_credentials c JOIN mobile_pairings p ON p.id = c.pairing_id WHERE c.token_hash = ? AND p.revoked_at IS NULL AND (p.expires_at IS NULL OR p.expires_at > ?)",
+  const pairing = row || await env.MOBILE_INBOX_DB.prepare(
+    "SELECT p.*, c.id AS credentialId, c.last_seen_at AS credentialLastSeenAt FROM mobile_pairing_credentials c JOIN mobile_pairings p ON p.id = c.pairing_id WHERE c.token_hash = ? AND p.revoked_at IS NULL AND (p.expires_at IS NULL OR p.expires_at > ?)",
   ).bind(tokenHash, now()).first();
-  return credentialRow || null;
+  if (!pairing) return null;
+  const seenAt = now();
+  const staleBefore = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  if (!pairing.last_seen_at || pairing.last_seen_at < staleBefore) {
+    await env.MOBILE_INBOX_DB.prepare(
+      "UPDATE mobile_pairings SET last_seen_at = ? WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)",
+    ).bind(seenAt, pairing.id, staleBefore).run();
+    pairing.last_seen_at = seenAt;
+  }
+  if (pairing.credentialId && (!pairing.credentialLastSeenAt || pairing.credentialLastSeenAt < staleBefore)) {
+    await env.MOBILE_INBOX_DB.prepare(
+      "UPDATE mobile_pairing_credentials SET last_seen_at = ? WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)",
+    ).bind(seenAt, pairing.credentialId, staleBefore).run();
+  }
+  return pairing;
 }
 
 async function createInstallTicket(env, pairingId, minutes = 10) {
@@ -120,10 +133,29 @@ function mobilePage({ bootstrapToken = "", installTicket = "", manifestHref = "/
   const encodedToken = JSON.stringify(bootstrapToken);
   const encodedInstallTicket = JSON.stringify(installTicket);
   const encodedManifestHref = String(manifestHref || "/manifest.webmanifest").replaceAll("&", "&amp;").replaceAll('"', "&quot;");
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f4f3ee"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Video Hub 收集"><link id="app-manifest" rel="manifest" href="${encodedManifestHref}"><title>Video Hub · 手机链接收集箱</title><style>
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="theme-color" content="#f4f3ee"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Video Hub 收集"><link id="app-manifest" rel="manifest" href="${encodedManifestHref}"><title>Video Hub · 手机链接收集箱</title><style>
   :root{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC",sans-serif;color:#20231f;background:#f4f3ee;font-synthesis:none;-webkit-text-size-adjust:100%;text-size-adjust:100%}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% 0,rgba(205,177,116,.2),transparent 36%),#f4f3ee;padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom)}main{width:min(100%,620px);margin:0 auto;padding:24px 0 48px}.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}.brand{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:760}.mark{display:grid;width:34px;height:34px;place-items:center;border-radius:11px;color:#fff;background:#20231f;font-size:12px;letter-spacing:-.04em}.online{display:flex;align-items:center;gap:6px;color:#6e736b;font-size:12px}.online:before{content:"";width:7px;height:7px;border-radius:50%;background:#54a577;box-shadow:0 0 0 4px rgba(84,165,119,.12)}.hero{margin-bottom:18px}.eyebrow{color:#9b742f;font-size:11px;font-weight:750;letter-spacing:.12em}.hero h1{margin:8px 0 8px;font-size:31px;line-height:1.15;letter-spacing:-.04em}.hero p{margin:0;color:#6b7068;font-size:14px;line-height:1.65}.panel{padding:18px;border:1px solid rgba(44,48,41,.1);border-radius:20px;background:rgba(255,255,255,.9);box-shadow:0 18px 55px rgba(45,42,32,.08);backdrop-filter:blur(18px)}label{display:block;margin-bottom:10px;color:#30342e;font-size:13px;font-weight:700}textarea{width:100%;min-height:126px;padding:15px;border:1px solid #dfe1da;border-radius:14px;outline:0;color:#20231f;background:#fbfcfa;font-family:inherit;font-size:16px;line-height:1.55;resize:vertical;transition:border-color .18s,box-shadow .18s}textarea:focus{border-color:#c3a15c;box-shadow:0 0 0 4px rgba(195,161,92,.13)}button{width:100%;min-height:50px;margin-top:12px;border:0;border-radius:14px;color:#fff;background:#20231f;font-family:inherit;font-size:15px;font-weight:700;cursor:pointer;transition:transform .16s,opacity .16s}button:active{transform:scale(.985)}button:disabled{opacity:.48;cursor:default}.status{min-height:21px;margin:11px 2px 0;color:#70756d;font-size:13px;line-height:1.5}.status.ok{color:#277250}.status.bad{color:#b04135}.tip{display:flex;gap:9px;margin-top:14px;padding:12px 13px;border-radius:12px;color:#73776f;background:#f5f5f1;font-size:12px;line-height:1.55}.tip b{flex:0 0 auto;color:#9b742f}.recent{margin-top:26px}.section-title{display:flex;align-items:end;justify-content:space-between;margin-bottom:10px}.section-title h2{margin:0;font-size:17px}.section-title span{color:#858980;font-size:11px}.list{display:grid;gap:9px}.empty{padding:25px 16px;border:1px dashed #d3d5cf;border-radius:15px;color:#888c84;text-align:center;font-size:13px}.item{padding:13px 14px;border:1px solid rgba(44,48,41,.09);border-radius:14px;background:rgba(255,255,255,.72)}.item-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.platform{color:#40443e;font-size:12px;font-weight:720}.state{padding:4px 8px;border-radius:999px;color:#6d7069;background:#e9ebe6;font-size:10px;font-weight:750}.state.success{color:#277250;background:#e5f4eb}.state.processing{color:#88661f;background:#f8efd7}.state.waiting_login,.state.waiting_verification,.state.failed{color:#ad4137;background:#fbe8e5}.item p{display:-webkit-box;margin:8px 0 0;overflow:hidden;color:#6b7068;font-size:12px;line-height:1.45;-webkit-box-orient:vertical;-webkit-line-clamp:2;word-break:break-all}.privacy{margin:22px 8px 0;color:#8a8e86;font-size:11px;line-height:1.6;text-align:center}.unpaired{display:none;margin-bottom:14px;padding:12px 14px;border-radius:13px;color:#a5483f;background:#fcebe8;font-size:13px;line-height:1.55}@media (min-width:700px){main{padding-top:46px}.panel{padding:22px}.hero h1{font-size:36px}}
   </style></head><body><main><div class="topbar"><div class="brand"><span class="mark">VH</span>Video Hub</div><div class="online">云端收集箱</div></div><section class="hero"><div class="eyebrow">MOBILE INBOX</div><h1>手机链接收集箱</h1><p>在公司、家里或外面刷到内容，都可以随时粘贴到这里。链接会在电脑端 Video Hub 显示，并进入现有灵感卡片采集流程。</p></section><section class="panel"><div id="unpaired" class="unpaired">这台手机还没有配对。请先在电脑端「手机收集」页面扫一次二维码。</div><form id="form"><label for="url">抖音、小红书或其他内容链接</label><textarea id="url" inputmode="url" autocomplete="off" placeholder="可以直接粘贴整段分享文字，我们会自动识别其中的链接"></textarea><button id="submit" type="submit">收集到电脑端</button><div id="status" class="status" role="status" aria-live="polite"></div></form><div class="tip"><b>提示</b><span>第一次扫码配对后，可以把本页添加到手机主屏幕。以后直接打开这个工作台，不需要重复扫码。</span></div></section><section class="recent"><div class="section-title"><h2>最近收集</h2><span id="updated"></span></div><div id="list" class="list"><div class="empty">暂无收集记录</div></div></section><p class="privacy">云端只暂存链接和处理状态，不保存视频、Cookie、平台账号、NAS 路径或资料库内容。</p></main><script>
-  const storageKey='video-hub.mobile-inbox.pairing-token';const bootstrapToken=${encodedToken};const installTicket=${encodedInstallTicket};const standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;let pairingToken=localStorage.getItem(storageKey)||'';if(bootstrapToken){localStorage.setItem(storageKey,bootstrapToken);pairingToken=bootstrapToken;history.replaceState({},'', '/app')}const form=document.querySelector('#form'),field=document.querySelector('#url'),status=document.querySelector('#status'),button=document.querySelector('#submit'),list=document.querySelector('#list'),updated=document.querySelector('#updated'),unpaired=document.querySelector('#unpaired'),manifestLink=document.querySelector('#app-manifest'),tip=document.querySelector('.tip span');const labels={pending:'已提交',processing:'电脑处理中',success:'已进入灵感库',waiting_login:'等待电脑登录',waiting_verification:'等待电脑验证',failed:'处理失败'};function platform(url){try{const host=new URL(url).hostname;if(host.includes('douyin'))return'抖音';if(host.includes('xiaohongshu')||host.includes('xhslink'))return'小红书';if(host.includes('bilibili')||host.includes('b23.tv'))return'B站';if(host.includes('youtube')||host.includes('youtu.be'))return'YouTube';if(host.includes('instagram'))return'Instagram';return'其他平台'}catch{return'内容链接'}}async function post(path,body){const response=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'请求失败');return data}function render(items){list.textContent='';if(!items.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='暂无收集记录';list.append(empty);return}for(const item of items){const card=document.createElement('article');card.className='item';const head=document.createElement('div');head.className='item-head';const name=document.createElement('span');name.className='platform';name.textContent=platform(item.sourceUrl);const state=document.createElement('span');state.className='state '+item.state;state.textContent=labels[item.state]||item.state;const source=document.createElement('p');source.textContent=item.sourceUrl;head.append(name,state);card.append(head,source);list.append(card)}}function showUnpaired(message=''){pairingToken='';localStorage.removeItem(storageKey);unpaired.textContent=message||(standalone?'这是之前添加的旧图标，它没有带入配对。请删掉这个旧图标，回到电脑端「手机收集」重新扫码，并在扫码打开的新页面里再添加到主屏幕一次。':'这台手机还没有配对。请先在电脑端「手机收集」页面扫一次二维码。');unpaired.style.display='block';field.disabled=true;button.disabled=true}async function redeemInstall(){if(pairingToken||!installTicket)return;const data=await post('/v1/mobile/install/redeem',{installTicket});pairingToken=data.pairingToken;localStorage.setItem(storageKey,pairingToken);history.replaceState({},'', '/app')}async function prepareInstallManifest(){if(!pairingToken||standalone)return;try{const data=await post('/v1/mobile/install-ticket',{pairingToken});if(data.install?.manifestUrl){manifestLink.href=data.install.manifestUrl;tip.textContent='已配对。现在可以把本页添加到手机主屏幕，从新图标启动仍会保持配对。'}}catch{tip.textContent='已配对，但安装凭据暂时准备失败。请保持本页打开后稍后再添加到主屏幕。'}}async function refresh(){if(!pairingToken)return;try{const data=await post('/v1/mobile/status',{pairingToken});render(data.submissions||[]);updated.textContent='刚刚更新'}catch(error){if(/\u914d\u5bf9|\u5931\u6548/.test(error.message))showUnpaired('这台手机的配对已失效。请在电脑端「手机收集」重新扫码。');updated.textContent='更新失败'}}async function initialize(){try{await redeemInstall()}catch(error){showUnpaired(error.message);return}if(!pairingToken){showUnpaired();return}field.disabled=false;button.disabled=false;void refresh();void prepareInstallManifest();setInterval(refresh,5000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refresh()})}void initialize();form.addEventListener('submit',async(event)=>{event.preventDefault();const value=field.value.trim();if(!value||!pairingToken)return;button.disabled=true;status.className='status';status.textContent='正在提交…';try{const data=await post('/v1/mobile/submissions',{pairingToken,url:value});status.className='status ok';status.textContent=data.duplicate?'这条链接已在收集箱中。':'已提交，电脑端会自动显示并处理。';if(!data.duplicate)field.value='';await refresh()}catch(error){status.className='status bad';status.textContent=error.message}finally{button.disabled=false}});
+  const storageKey='video-hub.mobile-inbox.pairing-token';
+  const bootstrapToken=${encodedToken};
+  const installTicket=${encodedInstallTicket};
+  const standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;
+  let pairingToken=localStorage.getItem(storageKey)||'';
+  if(bootstrapToken){localStorage.setItem(storageKey,bootstrapToken);pairingToken=bootstrapToken}
+  if(installTicket&&pairingToken&&!standalone){history.replaceState({},'', '/install/'+encodeURIComponent(installTicket))}
+  else if(bootstrapToken){history.replaceState({},'', '/app')}
+  const form=document.querySelector('#form'),field=document.querySelector('#url'),status=document.querySelector('#status'),button=document.querySelector('#submit'),list=document.querySelector('#list'),updated=document.querySelector('#updated'),unpaired=document.querySelector('#unpaired'),manifestLink=document.querySelector('#app-manifest'),tip=document.querySelector('.tip span');
+  const labels={pending:'已提交',processing:'电脑处理中',success:'已进入灵感库',waiting_login:'等待电脑登录',waiting_verification:'等待电脑验证',failed:'处理失败'};
+  function platform(url){try{const host=new URL(url).hostname;if(host.includes('douyin'))return'抖音';if(host.includes('xiaohongshu')||host.includes('xhslink'))return'小红书';if(host.includes('bilibili')||host.includes('b23.tv'))return'B站';if(host.includes('youtube')||host.includes('youtu.be'))return'YouTube';if(host.includes('instagram'))return'Instagram';return'其他平台'}catch{return'内容链接'}}
+  async function post(path,body){const response=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'请求失败');return data}
+  function render(items){list.textContent='';if(!items.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='暂无收集记录';list.append(empty);return}for(const item of items){const card=document.createElement('article');card.className='item';const head=document.createElement('div');head.className='item-head';const name=document.createElement('span');name.className='platform';name.textContent=platform(item.sourceUrl);const state=document.createElement('span');state.className='state '+item.state;state.textContent=labels[item.state]||item.state;const source=document.createElement('p');source.textContent=item.sourceUrl;head.append(name,state);card.append(head,source);list.append(card)}}
+  function showUnpaired(message=''){pairingToken='';localStorage.removeItem(storageKey);unpaired.textContent=message||(standalone?'这个主屏幕入口还没有连接。请在电脑端「手机收集」点击“连接这台手机的另一个入口”，重新生成一次主屏幕入口。':'这台手机还没有连接。请先在电脑端「手机收集」页面扫码。');unpaired.style.display='block';field.disabled=true;button.disabled=true}
+  async function redeemInstall(){if(pairingToken||!installTicket)return;const data=await post('/v1/mobile/install/redeem',{installTicket,prepareInstall:!standalone});pairingToken=data.pairingToken;localStorage.setItem(storageKey,pairingToken);if(data.install?.manifestUrl)manifestLink.href=data.install.manifestUrl;if(data.install?.installUrl)history.replaceState({},'',new URL(data.install.installUrl).pathname);else history.replaceState({},'', '/app')}
+  async function prepareInstallManifest(){if(!pairingToken||standalone||installTicket)return;try{const data=await post('/v1/mobile/install-ticket',{pairingToken});if(data.install?.manifestUrl){manifestLink.href=data.install.manifestUrl;if(data.install.installUrl)history.replaceState({},'',new URL(data.install.installUrl).pathname);tip.textContent='已准备主屏幕入口。现在添加到主屏幕，之后从图标打开会自动保持连接。'}}catch{tip.textContent='主屏幕入口暂时准备失败，请保持页面打开并稍后重试。'}}
+  async function refresh(){if(!pairingToken)return;try{const data=await post('/v1/mobile/status',{pairingToken});render(data.submissions||[]);updated.textContent='刚刚更新'}catch(error){if(/\u914d\u5bf9|\u5931\u6548/.test(error.message))showUnpaired('这台手机的连接已失效。请在电脑端「手机收集」重新连接。');updated.textContent='更新失败'}}
+  async function initialize(){try{await redeemInstall()}catch(error){showUnpaired(error.message);return}if(!pairingToken){showUnpaired();return}field.disabled=false;button.disabled=false;void refresh();void prepareInstallManifest();setInterval(refresh,5000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refresh()})}
+  void initialize();
+  form.addEventListener('submit',async(event)=>{event.preventDefault();const value=field.value.trim();if(!value||!pairingToken)return;button.disabled=true;status.className='status';status.textContent='正在提交…';try{const data=await post('/v1/mobile/submissions',{pairingToken,url:value});status.className='status ok';status.textContent=data.duplicate?'这条链接已在收集箱中。':'已提交，电脑端会自动显示并处理。';if(!data.duplicate)field.value='';await refresh()}catch(error){status.className='status bad';status.textContent=error.message}finally{button.disabled=false}});
   </script></body></html>`;
 }
 
@@ -239,8 +271,8 @@ async function createPairing(request, env) {
   const pairingId = id("pair");
   const label = String(body.label || "我的手机").trim().slice(0, 80) || "我的手机";
   await env.MOBILE_INBOX_DB.prepare(
-    "INSERT INTO mobile_pairings (id, token_hash, label, created_at, expires_at, created_by_device_id) VALUES (?, ?, ?, ?, ?, ?)",
-  ).bind(pairingId, await hash(pairToken), label, createdAt, expiresAt, auth.device.id).run();
+    "INSERT INTO mobile_pairings (id, token_hash, label, created_at, last_seen_at, expires_at, created_by_device_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).bind(pairingId, await hash(pairToken), label, createdAt, null, expiresAt, auth.device.id).run();
   const url = new URL(request.url);
   return json({ pairing: {
     id: pairingId,
@@ -256,9 +288,26 @@ async function listPairings(request, env) {
   const auth = await requireDevice(request, env);
   if (auth.response) return auth.response;
   const results = await env.MOBILE_INBOX_DB.prepare(
-    "SELECT id, label, created_at AS createdAt, expires_at AS expiresAt, revoked_at AS revokedAt FROM mobile_pairings ORDER BY created_at DESC",
+    "SELECT p.id, p.label, p.created_at AS createdAt, p.last_seen_at AS lastSeenAt, p.expires_at AS expiresAt, p.revoked_at AS revokedAt, (SELECT COUNT(*) FROM mobile_pairing_credentials c WHERE c.pairing_id = p.id) AS credentialCount FROM mobile_pairings p ORDER BY p.created_at DESC",
   ).all();
   return json({ pairings: results.results || [] });
+}
+
+async function createPairingHandoff(request, env, pairingId) {
+  const auth = await requireDevice(request, env);
+  if (auth.response) return auth.response;
+  const pairing = await env.MOBILE_INBOX_DB.prepare(
+    "SELECT id, label FROM mobile_pairings WHERE id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)",
+  ).bind(pairingId, now()).first();
+  if (!pairing) return error("这台手机不存在或已被撤销", 404, "PAIRING_NOT_FOUND");
+  const created = await createInstallTicket(env, pairing.id);
+  const origin = new URL(request.url).origin;
+  return json({ handoff: {
+    pairingId: pairing.id,
+    label: pairing.label,
+    mobileUrl: `${origin}/install/${encodeURIComponent(created.installTicket)}`,
+    expiresAt: created.expiresAt,
+  } }, 201);
 }
 
 async function revokePairing(request, env, pairingId) {
@@ -278,6 +327,7 @@ async function createMobileInstallTicket(request, env) {
   const encoded = encodeURIComponent(created.installTicket);
   return json({ install: {
     expiresAt: created.expiresAt,
+    installUrl: `${url.origin}/install/${encoded}`,
     manifestUrl: `${url.origin}/manifest.webmanifest?ticket=${encoded}`,
   } }, 201);
 }
@@ -302,7 +352,18 @@ async function redeemMobileInstallTicket(request, env) {
   await env.MOBILE_INBOX_DB.prepare(
     "UPDATE mobile_install_tickets SET credential_id = ? WHERE id = ?",
   ).bind(credentialId, ticketRow.id).run();
-  return json({ pairingToken }, 201);
+  const response = { pairingToken };
+  if (body?.prepareInstall) {
+    const next = await createInstallTicket(env, ticketRow.pairingId);
+    const origin = new URL(request.url).origin;
+    const encoded = encodeURIComponent(next.installTicket);
+    response.install = {
+      expiresAt: next.expiresAt,
+      installUrl: `${origin}/install/${encoded}`,
+      manifestUrl: `${origin}/manifest.webmanifest?ticket=${encoded}`,
+    };
+  }
+  return json(response, 201);
 }
 
 async function submitMobileLink(request, env) {
@@ -414,7 +475,7 @@ async function desktopDashboard(request, env) {
       "SELECT id, source_url AS sourceUrl, state, attempt, content_id AS contentId, error_code AS errorCode, error_message AS errorMessage, created_at AS createdAt, updated_at AS updatedAt FROM mobile_submissions ORDER BY created_at DESC LIMIT 100",
     ).all(),
     env.MOBILE_INBOX_DB.prepare(
-      "SELECT id, label, created_at AS createdAt, expires_at AS expiresAt, revoked_at AS revokedAt FROM mobile_pairings ORDER BY created_at DESC",
+      "SELECT p.id, p.label, p.created_at AS createdAt, p.last_seen_at AS lastSeenAt, p.expires_at AS expiresAt, p.revoked_at AS revokedAt, (SELECT COUNT(*) FROM mobile_pairing_credentials c WHERE c.pairing_id = p.id) AS credentialCount FROM mobile_pairings p ORDER BY p.created_at DESC",
     ).all(),
     env.MOBILE_INBOX_DB.prepare(
       "SELECT id, label, role, created_at AS createdAt, last_seen_at AS lastSeenAt, revoked_at AS revokedAt FROM desktop_devices ORDER BY created_at ASC",
@@ -467,6 +528,7 @@ export default {
         const created = await createInstallTicket(env, pairing.id);
         return new Response(mobilePage({
           bootstrapToken: pairToken,
+          installTicket: created.installTicket,
           manifestHref: `/manifest.webmanifest?ticket=${encodeURIComponent(created.installTicket)}`,
         }), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
       }
@@ -481,6 +543,7 @@ export default {
       if (request.method === "POST" && url.pathname.match(/^\/v1\/desktop\/devices\/[^/]+\/revoke$/)) return revokeDevice(request, env, decodeURIComponent(url.pathname.split("/")[4]));
       if (request.method === "POST" && url.pathname === "/v1/pairings") return createPairing(request, env);
       if (request.method === "GET" && url.pathname === "/v1/pairings") return listPairings(request, env);
+      if (request.method === "POST" && url.pathname.match(/^\/v1\/pairings\/[^/]+\/handoff$/)) return createPairingHandoff(request, env, decodeURIComponent(url.pathname.split("/")[3]));
       if (request.method === "POST" && url.pathname.match(/^\/v1\/pairings\/[^/]+\/revoke$/)) return revokePairing(request, env, decodeURIComponent(url.pathname.split("/")[3]));
       if (request.method === "POST" && url.pathname === "/v1/mobile/install-ticket") return createMobileInstallTicket(request, env);
       if (request.method === "POST" && url.pathname === "/v1/mobile/install/redeem") return redeemMobileInstallTicket(request, env);

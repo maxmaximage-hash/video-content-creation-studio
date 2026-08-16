@@ -210,6 +210,9 @@ export function createMobileInboxService({
     async listPairings() {
       return request("/v1/pairings", { method: "GET" });
     },
+    async createPairingHandoff(id) {
+      return request(`/v1/pairings/${encodeURIComponent(id)}/handoff`, { method: "POST", body: "{}" });
+    },
     async revokePairing(id) {
       const result = await request(`/v1/pairings/${encodeURIComponent(id)}/revoke`, { method: "POST", body: "{}" });
       const config = await credentials();

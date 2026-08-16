@@ -12,6 +12,9 @@
 .mobile-device-panel h2 { margin: 4px 0 8px; font-size: 20px; }
 .mobile-inbox-pair p,
 .mobile-device-panel p { max-width: 590px; margin: 0 0 18px; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.mobile-pairing-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.mobile-pairing-actions .primary-button,
+.mobile-pairing-actions .quiet-button { width: auto; }
 .mobile-web-app-address { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px 12px; max-width: 590px; margin-top: 16px; padding: 12px 14px; border: 1px solid var(--soft-line); border-radius: 10px; background: var(--surface-soft, #f8f8f6); }
 .mobile-web-app-address > span { grid-column: 1 / -1; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .04em; }
 .mobile-web-app-address code { min-width: 0; overflow: hidden; color: var(--ink); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
@@ -19,6 +22,15 @@
 .mobile-qr { width: 208px; display: grid; justify-items: center; gap: 9px; padding: 14px; border: 1px solid var(--soft-line); border-radius: 10px; background: #fff; }
 .mobile-qr strong { color: var(--ink); font-size: 11px; text-align: center; }
 .mobile-qr small { color: var(--muted); font-size: 10px; }
+.mobile-qr-placeholder { min-height: 222px; align-content: center; color: var(--muted); }
+.mobile-phone-list { display: grid; gap: 8px; margin-top: 14px; }
+.mobile-phone-list > div { display: flex; align-items: center; gap: 9px; max-width: 590px; padding: 10px 11px; border: 1px solid var(--soft-line); border-radius: 9px; background: var(--surface-soft, #f8f8f6); }
+.mobile-phone-list > div.current { border-color: rgba(155,116,47,.42); }
+.mobile-phone-list span { min-width: 0; display: grid; gap: 2px; }
+.mobile-phone-list strong { font-size: 12px; }
+.mobile-phone-list small { color: var(--muted); font-size: 10px; }
+.mobile-phone-list em { margin-left: auto; color: var(--accent-dark); font-size: 10px; font-style: normal; font-weight: 700; }
+.mobile-phone-list button { display: grid; width: 28px; height: 28px; place-items: center; padding: 0; border: 0; color: #b04135; background: transparent; cursor: pointer; }
 .quiet-button.danger { color: #b04135; }
 
 .mobile-setup-panel { display: grid; gap: 16px; }

@@ -3876,6 +3876,11 @@ function installLibraryApi(server, libraryManager, options = {}) {
               res.end(JSON.stringify(await service.createPairing(payload)));
               return;
             }
+            const pairingHandoffMatch = requestUrl.pathname.match(/^\/api\/mobile-inbox\/pairings\/([^/]+)\/handoff$/);
+            if (pairingHandoffMatch && req.method === "POST") {
+              res.end(JSON.stringify(await service.createPairingHandoff(decodeURIComponent(pairingHandoffMatch[1]))));
+              return;
+            }
             const pairingMatch = requestUrl.pathname.match(/^\/api\/mobile-inbox\/pairings\/([^/]+)\/revoke$/);
             if (pairingMatch && req.method === "POST") {
               res.end(JSON.stringify(await service.revokePairing(decodeURIComponent(pairingMatch[1]))));

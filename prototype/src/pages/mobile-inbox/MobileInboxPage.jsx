@@ -28,6 +28,7 @@ async function api(path, options = {}) {
 export function MobileInboxPage({ storage, libraryWritable, onApplyLibrary, notify }) {
   const [status, setStatus] = useState({ configured: false, connected: false, submissions: [], pairings: [], devices: [] });
   const [pairing, setPairing] = useState(null);
+  const [pairingQr, setPairingQr] = useState(null);
   const [activation, setActivation] = useState(null);
   const [busy, setBusy] = useState(false);
   const [endpoint, setEndpoint] = useState("");
@@ -39,10 +40,11 @@ export function MobileInboxPage({ storage, libraryWritable, onApplyLibrary, noti
     const result = await api("/api/mobile-inbox/status");
     setStatus(result);
     setEndpoint((current) => current || result.endpoint || "");
-    if (result.mobilePairing) {
-      const remote = result.pairings?.find((item) => item.id === result.mobilePairing.id && !item.revokedAt);
-      setPairing(remote ? { ...remote, ...result.mobilePairing } : null);
-    }
+    const activePairings = result.pairings?.filter((item) => !item.revokedAt) || [];
+    const remote = result.mobilePairing
+      ? activePairings.find((item) => item.id === result.mobilePairing.id)
+      : activePairings[0];
+    setPairing(remote ? { ...remote, ...(remote.id === result.mobilePairing?.id ? result.mobilePairing : {}) } : null);
     return result;
   }, []);
 
@@ -103,16 +105,35 @@ export function MobileInboxPage({ storage, libraryWritable, onApplyLibrary, noti
     }
   }, [busy, libraryWritable, notify, onApplyLibrary, refresh, status.connected, storage?.sessionId]);
 
-  const createPairing = async () => {
+  const createPairing = async ({ additional = false } = {}) => {
     setBusy(true);
     try {
+      const activeCount = status.pairings?.filter((item) => !item.revokedAt).length || 0;
       const result = await api("/api/mobile-inbox/pairings", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ label: "我的手机" }),
+        body: JSON.stringify({ label: additional && activeCount ? `我的手机 ${activeCount + 1}` : "我的手机" }),
       });
       setPairing(result.pairing);
+      setPairingQr({ ...result.pairing, mode: "new" });
       await refresh();
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createPairingHandoff = async () => {
+    if (!pairing?.id) {
+      await createPairing();
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await api(`/api/mobile-inbox/pairings/${encodeURIComponent(pairing.id)}/handoff`, { method: "POST" });
+      setPairingQr({ ...result.handoff, id: pairing.id, mode: "entry" });
+      notify("已生成同一台手机的新入口，二维码 10 分钟内有效");
     } catch (error) {
       notify(error.message);
     } finally {
@@ -141,6 +162,7 @@ export function MobileInboxPage({ storage, libraryWritable, onApplyLibrary, noti
     try {
       await api(`/api/mobile-inbox/${kind}/${encodeURIComponent(id)}/revoke`, { method: "POST" });
       if (kind === "pairings" && pairing?.id === id) setPairing(null);
+      if (kind === "pairings" && pairingQr?.id === id) setPairingQr(null);
       await refresh();
       notify(kind === "pairings" ? "已撤销这台手机的提交权限" : "已撤销这台电脑的工作区权限");
     } catch (error) {
@@ -166,6 +188,7 @@ export function MobileInboxPage({ storage, libraryWritable, onApplyLibrary, noti
     navigator.clipboard.writeText(value).then(() => notify(message)).catch(() => notify("复制失败"));
   };
 
+  const activePairings = useMemo(() => status.pairings?.filter((item) => !item.revokedAt) || [], [status.pairings]);
   const groups = useMemo(() => ({
     pending: status.submissions?.filter((item) => item.state === "pending") || [],
     processing: status.submissions?.filter((item) => item.state === "processing") || [],
@@ -201,8 +224,18 @@ export function MobileInboxPage({ storage, libraryWritable, onApplyLibrary, noti
       ) : (
         <>
           <section className="mobile-inbox-pair">
-            <div><span className="eyebrow">手机 WEB APP</span><h2>一个固定的手机链接收集工作台</h2><p>第一次在手机打开时扫码配对。配对后可以收藏网址或添加到主屏幕，以后直接打开 Web App，不需要每次扫码。</p><button type="button" className="primary-button" disabled={busy} onClick={createPairing}><Link2 size={15} />{pairing ? "配对另一台手机" : "首次配对手机"}</button>{pairing?.webAppUrl && <div className="mobile-web-app-address"><span>固定工作台地址</span><code>{pairing.webAppUrl}</code><button type="button" className="quiet-button" onClick={() => copy(pairing.webAppUrl, "已复制手机 Web App 地址")}><Copy size={14} />复制地址</button></div>}</div>
-            {pairing && <div className="mobile-qr"><QRCodeSVG value={pairing.mobileUrl} size={164} bgColor="#ffffff" fgColor="#20231f" /><strong>仅首次配对需要扫码</strong><small>扫码后手机会自动进入固定 Web App 工作台</small><button type="button" className="quiet-button danger" disabled={busy} onClick={() => revoke("pairings", pairing.id)}><Trash2 size={14} />撤销这台手机</button></div>}
+            <div>
+              <span className="eyebrow">手机 WEB APP</span>
+              <h2>一台手机，多种入口，共用同一份收集箱</h2>
+              <p>微信、Safari 和主屏幕 App 会作为同一台手机的不同入口，不再重复创建手机授权。主屏幕旧图标若提示未连接，只需重新生成一次入口。</p>
+              <div className="mobile-pairing-actions">
+                <button type="button" className="primary-button" disabled={busy} onClick={() => void createPairingHandoff()}><Link2 size={15} />{pairing ? "连接这台手机的另一个入口" : "连接我的手机"}</button>
+                {pairing && <button type="button" className="quiet-button" disabled={busy} onClick={() => void createPairing({ additional: true })}><Plus size={15} />添加另一台手机</button>}
+              </div>
+              {pairing?.webAppUrl && <div className="mobile-web-app-address"><span>固定工作台地址</span><code>{pairing.webAppUrl}</code><button type="button" className="quiet-button" onClick={() => copy(pairing.webAppUrl, "已复制手机 Web App 地址")}><Copy size={14} />复制地址</button></div>}
+              {activePairings.length > 0 && <div className="mobile-phone-list">{activePairings.map((item) => <div key={item.id} className={item.id === pairing?.id ? "current" : ""}><Smartphone size={15} /><span><strong>{item.label}</strong><small>{Number(item.credentialCount || 0) + 1} 个入口{item.lastSeenAt ? " · 最近使用 " + new Date(item.lastSeenAt).toLocaleString("zh-CN") : ""}</small></span>{item.id === pairing?.id && <em>当前</em>}<button type="button" disabled={busy} onClick={() => revoke("pairings", item.id)} aria-label={"撤销" + item.label}><Trash2 size={13} /></button></div>)}</div>}
+            </div>
+            {pairingQr ? <div className="mobile-qr"><QRCodeSVG value={pairingQr.mobileUrl} size={164} bgColor="#ffffff" fgColor="#20231f" /><strong>{pairingQr.mode === "entry" ? "连接同一台手机的新入口" : "连接新的手机"}</strong><small>{pairingQr.mode === "entry" ? "用当前手机扫码；添加到主屏幕后从新图标打开一次" : "仅在另一台物理手机上扫码"}</small></div> : <div className="mobile-qr mobile-qr-placeholder"><Smartphone size={34} /><strong>{pairing ? "点击左侧按钮生成入口二维码" : "先连接第一台手机"}</strong><small>二维码只包含短期连接凭据</small></div>}
           </section>
 
           <section className="mobile-device-panel">

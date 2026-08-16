@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS mobile_pairings (
   token_hash TEXT NOT NULL UNIQUE,
   label TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
+  last_seen_at TEXT,
   expires_at TEXT NOT NULL,
   revoked_at TEXT,
   created_by_device_id TEXT NOT NULL,
