@@ -1435,12 +1435,14 @@
 }
 
 .queue-phase1 .queue-inspiration-card .inspiration-card {
-  width: 100% !important;
-  --card-width: 100%;
+  /* 右侧保持灵感库的完整卡片功能，但按原比例缩至与左侧创作区同高。 */
+  width: calc(100% / .68) !important;
+  --card-width: calc(100% / .68);
+  zoom: .68;
 }
 
 .queue-phase1 .queue-inspiration-card .inspiration-media {
-  min-height: 170px;
+  min-height: 0;
 }
 
 .queue-phase1 .queue-inspiration-card .inspiration-media video {
