@@ -182,7 +182,7 @@ async function findEagleInfoDir(itemId) {
   throw new EagleUnavailableError("Eagle 文件不可用/重新关联", 404);
 }
 
-async function eagleItemInfoFromLibrary(itemId) {
+export async function eagleItemInfoFromLibrary(itemId) {
   const id = validateEagleItemId(itemId);
   const infoDir = await findEagleInfoDir(id);
   const metadataPath = path.join(infoDir, "metadata.json");

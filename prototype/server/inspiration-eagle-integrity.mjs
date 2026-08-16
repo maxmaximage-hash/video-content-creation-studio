@@ -73,6 +73,28 @@ export async function auditInspirationVideo(item = {}, options = {}) {
       : { state: "missing", contentId: item.id || "", reason: "no_eagle_or_local_video" };
   }
 
+  if (options.eagleItemInfoFromLibrary) {
+    try {
+      const localEagleItem = await options.eagleItemInfoFromLibrary(asset.eagleItemId);
+      if (!eagleItemBelongsToFolder(localEagleItem, options.folderId || INSPIRATION_VIDEO_FOLDER_ID)) {
+        return { state: "wrong_folder", contentId: item.id || "", eagleItem: localEagleItem };
+      }
+      if (Number(localEagleItem.size) <= 64 * 1024) {
+        return { state: "invalid_eagle_file", contentId: item.id || "", eagleItem: localEagleItem };
+      }
+      if (options.resolveEagleOriginalPath) {
+        const resolved = await options.resolveEagleOriginalPath(localEagleItem);
+        if (!resolved?.stat?.isFile?.() || resolved.stat.size !== Number(localEagleItem.size)) {
+          return { state: "invalid_eagle_file", contentId: item.id || "", eagleItem: localEagleItem };
+        }
+      }
+      return { state: "available", contentId: item.id || "", eagleItem: localEagleItem, source: "library" };
+    } catch {
+      // A locally mounted Eagle Library can be briefly unavailable. Fall through
+      // to the Eagle API so a local lookup failure can never delete a card.
+    }
+  }
+
   try {
     const eagleItem = await options.eagleItemInfo(asset.eagleItemId);
     if (!eagleItemBelongsToFolder(eagleItem, options.folderId || INSPIRATION_VIDEO_FOLDER_ID)) {

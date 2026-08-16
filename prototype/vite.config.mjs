@@ -49,6 +49,7 @@ import {
 } from "./server/path-security.mjs";
 import {
   eagleItemInfo,
+  eagleItemInfoFromLibrary,
   importPathToEagle,
   resolveEagleOriginalPath,
   serveEagleMedia,
@@ -3519,6 +3520,8 @@ function installLibraryApi(server, libraryManager, options = {}) {
       const missing = await findDefinitivelyMissingInspirationVideos(library.inspirations || [], {
         libraryDir: storage.libraryDir,
         folderId: INSPIRATION_VIDEO_FOLDER_ID,
+        eagleItemInfoFromLibrary,
+        resolveEagleOriginalPath,
         eagleItemInfo: (itemId) => eagleItemInfo(itemId, {
           eagleItemInfoAttempts: 2,
           eagleItemInfoRetryDelayMs: 200,

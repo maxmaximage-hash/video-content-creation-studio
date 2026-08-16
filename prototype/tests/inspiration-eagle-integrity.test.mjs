@@ -60,6 +60,53 @@ test("temporary Eagle outage never deletes a record", async () => {
   assert.equal(result.state, "unknown");
 });
 
+test("valid local Eagle entities skip the per-item Eagle API request", async () => {
+  let apiCalls = 0;
+  const result = await auditInspirationVideo({
+    id: "I000086",
+    contentType: "video",
+    eagleItemId: "MSVH27AEFAR3D",
+  }, {
+    eagleItemInfoFromLibrary: async () => ({
+      id: "MSVH27AEFAR3D",
+      folders: ["MSOSVPR2743KV"],
+      size: 512 * 1024,
+    }),
+    resolveEagleOriginalPath: async () => ({
+      stat: {
+        isFile: () => true,
+        size: 512 * 1024,
+      },
+    }),
+    eagleItemInfo: async () => {
+      apiCalls += 1;
+      throw new Error("should not be called");
+    },
+  });
+  assert.equal(result.state, "available");
+  assert.equal(result.source, "library");
+  assert.equal(apiCalls, 0);
+});
+
+test("local Eagle lookup failure falls back to API without treating outages as missing", async () => {
+  let apiCalls = 0;
+  const result = await auditInspirationVideo({
+    id: "I000086",
+    contentType: "video",
+    eagleItemId: "MSVH27AEFAR3D",
+  }, {
+    eagleItemInfoFromLibrary: async () => {
+      throw Object.assign(new Error("mount unavailable"), { statusCode: 404 });
+    },
+    eagleItemInfo: async () => {
+      apiCalls += 1;
+      throw Object.assign(new Error("connect ECONNREFUSED"), { statusCode: 503 });
+    },
+  });
+  assert.equal(result.state, "unknown");
+  assert.equal(apiCalls, 1);
+});
+
 test("a readable local source is preserved when Eagle is missing", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "inspiration-integrity-"));
   const relativePath = "content-units/I000086/media/captured-video/video.mp4";
