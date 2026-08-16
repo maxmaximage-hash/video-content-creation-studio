@@ -32,6 +32,24 @@ test("success and partial both require local media while partial stays distinct"
   assert.equal(success.parseState, "success");
 });
 
+test("a verified Eagle video reference satisfies the durable media quality gate", () => {
+  const success = evaluateExtractionQuality({
+    platform: "抖音",
+    platformItemId: "7665312659092932859",
+    title: "标题",
+    body: "正文",
+    author: "作者",
+    contentType: "video",
+    eagleItemId: "MSVH27AEFAR3D",
+    mediaAssets: [{ role: "captured_video", eagleItemId: "MSVH27AEFAR3D" }],
+  }, {
+    authState: "authenticated",
+    targetMatched: true,
+  });
+  assert.equal(success.parseState, "success");
+  assert.equal(success.errorCode, "");
+});
+
 test("challenge quality uses result.platform and returns waiting_verification without throwing", () => {
   const douyin = evaluateExtractionQuality({ platform: "抖音", platformItemId: "1" }, {
     authState: "challenge",

@@ -7,6 +7,7 @@ import test from "node:test";
 import { eagleItemInfo, importPathToEagle, serveEagleMedia, setEagleAnnotation } from "../server/eagle-adapter.mjs";
 import { eagleFolderIdForAsset } from "../src/services/eagle-asset-routing.js";
 import { eagleMediaSource } from "../src/services/eagle-media.js";
+import { eagleItemBelongsToFolder } from "../server/inspiration-eagle-integrity.mjs";
 import { deleteProjectMediaContent, downloadVideo, projectAssetStates } from "../vite.config.mjs";
 
 test("Eagle folder routing is fixed by account role and asset role", () => {
@@ -227,42 +228,14 @@ test("Eagle item remains readable after moving to another folder", async (t) => 
   assert.equal(eagleMediaSource({ eagleItemId: "MSOTJV3L8V1WM", eagleFolderId: "MS8R943CBJV6L" }), "/api/eagle-media/MSOTJV3L8V1WM");
 });
 
-test("reusing an existing Eagle item ignores its historical folder", async (t) => {
-  const previousApi = process.env.VIDEO_STUDIO_EAGLE_API_BASE;
-  let infoCalls = 0;
-  const server = http.createServer((req, res) => {
-    res.setHeader("content-type", "application/json");
-    if (req.url?.startsWith("/api/item/info")) {
-      infoCalls += 1;
-      res.end(JSON.stringify({ status: "success", data: {
-        id: "MSOTJV3L8V1WM", size: 4096, ext: "mp4", folders: ["MS-MOVED"], isDeleted: false,
-      } }));
-      return;
-    }
-    res.statusCode = 404;
-    res.end(JSON.stringify({ status: "error", message: "missing" }));
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  process.env.VIDEO_STUDIO_EAGLE_API_BASE = `http://127.0.0.1:${server.address().port}/api`;
-  t.after(async () => {
-    if (previousApi === undefined) delete process.env.VIDEO_STUDIO_EAGLE_API_BASE;
-    else process.env.VIDEO_STUDIO_EAGLE_API_BASE = previousApi;
-    await new Promise((resolve) => server.close(resolve));
-  });
-  const evidence = [];
-  const result = await downloadVideo(
-    "https://video.example/moved.mp4",
-    "I000085",
-    evidence,
-    { readLibrary: async () => ({ inspirations: [{
-      id: "I000085",
-      mediaAssets: [{ eagleItemId: "MSOTJV3L8V1WM", eagleFolderId: "MSOSVPR2743KV" }],
-    }] }) },
-  );
-  assert.equal(infoCalls, 1);
-  assert.equal(result.eagleItemId, "MSOTJV3L8V1WM");
-  assert.equal(result.videoPreviewUrl, "/api/eagle-media/MSOTJV3L8V1WM");
-  assert.equal(result.eagleFolderId, "MSOSVPR2743KV");
+test("an inspiration Eagle item moved out of the fixed folder cannot be reused", () => {
+  assert.equal(eagleItemBelongsToFolder({
+    id: "MSOTJV3L8V1WM",
+    size: 4096,
+    ext: "mp4",
+    folders: ["MS-MOVED"],
+    isDeleted: false,
+  }, "MSOSVPR2743KV"), false);
 });
 
 test("missing Eagle items return a stable missing state", async (t) => {

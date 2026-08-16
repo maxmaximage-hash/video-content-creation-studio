@@ -189,8 +189,10 @@ function normalizeLibrary(data = {}) {
       ].some((asset) => (
         asset?.localPath
         || asset?.relativePath
+        || asset?.eagleItemId
         || String(asset?.src || "").startsWith("/library-assets/")
-      )) || String(enrichedItem.videoLocalPath || "").startsWith("/library-assets/");
+      )) || String(enrichedItem.videoLocalPath || "").startsWith("/library-assets/")
+        || Boolean(enrichedItem.eagleItemId);
       return {
         ...enrichedItem,
         acquisitionState: hasLocalMedia ? "acquired" : (enrichedItem.acquisitionState || "pending"),

@@ -54,6 +54,11 @@ import {
   serveEagleMedia,
   setEagleAnnotation,
 } from "./server/eagle-adapter.mjs";
+import {
+  eagleItemBelongsToFolder,
+  findDefinitivelyMissingInspirationVideos,
+  INSPIRATION_VIDEO_FOLDER_ID,
+} from "./server/inspiration-eagle-integrity.mjs";
 import { eagleFolderIdForAsset } from "./src/services/eagle-asset-routing.js";
 import { transcriptBodyPatch } from "./src/services/transcript-body.js";
 
@@ -1248,9 +1253,14 @@ export async function downloadVideo(videoUrl, itemId, evidence, libraryManager, 
     currentItem?.eagleItemId ? currentItem : null,
   ].find((asset) => asset?.eagleItemId);
   if (existingAsset?.eagleItemId) {
-    const folderId = existingAsset.eagleFolderId || eagleFolderIdForAsset({ assetRole: "inspiration_video" });
+    const folderId = eagleFolderIdForAsset({ assetRole: "inspiration_video" });
     try {
       const item = await eagleItemInfo(existingAsset.eagleItemId);
+      if (!eagleItemBelongsToFolder(item, folderId)) throw apiError("已记录的 Eagle 视频不在视频灵感库", 409);
+      const resolved = await resolveEagleOriginalPath(item);
+      if (!resolved.stat.isFile() || resolved.stat.size !== Number(item.size) || Number(item.size) <= 64 * 1024) {
+        throw apiError("已记录的 Eagle 视频实体无效", 409);
+      }
       evidence.push(`已复用 Eagle 灵感视频: ${item.id}`);
       return {
         eagleItemId: item.id,
@@ -2713,6 +2723,10 @@ async function verifiedEagleImport({ tempPath, folderId, originalName, contentId
   if (Number(item.size) !== Number(size)) {
     throw apiError("Eagle 导入后文件大小校验失败", 502);
   }
+  const resolved = await resolveEagleOriginalPath(item);
+  if (!resolved.stat.isFile() || resolved.stat.size !== Number(size)) {
+    throw apiError("Eagle 导入后实体文件校验失败", 502);
+  }
   return {
     item,
     mediaSrc: `/api/eagle-media/${encodeURIComponent(item.id)}?folderId=${encodeURIComponent(folderId)}`,
@@ -3488,6 +3502,47 @@ export async function syncMobileInbox({
 function installLibraryApi(server, libraryManager, options = {}) {
   const authManager = options.authManager;
   let resumedCleanupLibraryDir = "";
+  let lastInspirationIntegritySession = "";
+  let lastInspirationIntegrityCheckAt = 0;
+  let inspirationIntegrityTask = null;
+
+  async function reconcileMissingInspirationVideos() {
+    const storage = libraryManager.storage();
+    if (!storage?.libraryDir || !storage?.sessionId) return libraryManager.readLibrary();
+    const now = Date.now();
+    if (storage.sessionId === lastInspirationIntegritySession && now - lastInspirationIntegrityCheckAt < 60_000) {
+      return libraryManager.readLibrary();
+    }
+    if (inspirationIntegrityTask) return inspirationIntegrityTask;
+    inspirationIntegrityTask = (async () => {
+      let library = await libraryManager.readLibrary();
+      const missing = await findDefinitivelyMissingInspirationVideos(library.inspirations || [], {
+        libraryDir: storage.libraryDir,
+        folderId: INSPIRATION_VIDEO_FOLDER_ID,
+        eagleItemInfo: (itemId) => eagleItemInfo(itemId, {
+          eagleItemInfoAttempts: 2,
+          eagleItemInfoRetryDelayMs: 200,
+        }),
+      });
+      for (const { item } of missing) {
+        const result = await deleteContentUnitPermanently(
+          { id: item.id },
+          storage.sessionId,
+          "",
+          libraryManager,
+        );
+        library = result.library;
+      }
+      lastInspirationIntegritySession = storage.sessionId;
+      lastInspirationIntegrityCheckAt = Date.now();
+      return library;
+    })();
+    try {
+      return await inspirationIntegrityTask;
+    } finally {
+      inspirationIntegrityTask = null;
+    }
+  }
   server.middlewares.use(async (req, res, next) => {
         const activeLibraryDir = libraryManager.storage()?.libraryDir || "";
         if (activeLibraryDir && resumedCleanupLibraryDir !== activeLibraryDir) {
@@ -4013,7 +4068,7 @@ function installLibraryApi(server, libraryManager, options = {}) {
             return;
           }
           if (req.method === "GET") {
-            res.end(JSON.stringify(await libraryManager.readLibrary()));
+            res.end(JSON.stringify(await reconcileMissingInspirationVideos()));
             return;
           }
           if (req.method === "POST") {

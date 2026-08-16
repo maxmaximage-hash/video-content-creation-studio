@@ -72,7 +72,10 @@ function meaningfulFieldCount(result = {}) {
 
 function localAssetCount(result = {}) {
   const images = Array.isArray(result.images) ? result.images.filter((image) => image?.localPath || image?.relativePath).length : 0;
-  return images + [result.coverLocalPath, result.videoLocalPath].filter(Boolean).length;
+  const eagleVideos = Array.isArray(result.mediaAssets)
+    ? result.mediaAssets.filter((asset) => asset?.eagleItemId && ["captured_video", "inspiration_video"].includes(String(asset.role || "captured_video"))).length
+    : 0;
+  return images + [result.coverLocalPath, result.videoLocalPath, result.eagleItemId].filter(Boolean).length + eagleVideos;
 }
 
 function stateResult(parseState, parseStatus, errorCode = "", extras = {}) {
@@ -113,7 +116,11 @@ export function evaluateExtractionQuality(result = {}, context = {}) {
   const assets = localAssetCount(result);
   const isVideo = result.contentType === "video" || Boolean(result.videoUrl);
   const hasRequiredLocalMedia = isVideo
-    ? Boolean(result.videoLocalPath)
+    ? Boolean(
+      result.videoLocalPath
+      || result.eagleItemId
+      || result.mediaAssets?.some?.((asset) => asset?.eagleItemId),
+    )
     : assets > 0;
   const platformLabel = result.platform === "抖音" ? "抖音" : result.platform === "小红书" ? "小红书" : "对应平台";
 
