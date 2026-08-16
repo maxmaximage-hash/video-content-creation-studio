@@ -216,6 +216,10 @@ export function visibleBodyText(item = {}) {
   return normalizeComparableText(body) === normalizeComparableText(item.title) ? "" : body;
 }
 
+export function usesEagleAnnotation(item = {}) {
+  return item.captionStorage === "eagle_annotation" || Boolean(item.captionEagleItemId);
+}
+
 export function makeInspiration(url, category, existing) {
   const platform = detectPlatform(url);
   return {

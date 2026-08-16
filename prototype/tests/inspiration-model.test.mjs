@@ -5,6 +5,7 @@ import {
   collectReferencedInspirationIds,
   requiresInspirationAttention,
   sortInspirationItems,
+  usesEagleAnnotation,
 } from "../src/features/inspirations/inspiration-model.js";
 
 test("failed and waiting recaptures preserve prior successful copy and local media", () => {
@@ -98,4 +99,16 @@ test("attention filter finds unfinished captures, missing media, and local video
   assert.equal(requiresInspirationAttention({ videoLocalPath: "/library-assets/content-units/I000001/media/captured-video/video.mp4" }), true);
   assert.equal(requiresInspirationAttention({ videoLocalPath: "/library-assets/content-units/I000001/media/captured-video/video.mp4", transcript: "已有逐字稿" }), false);
   assert.equal(requiresInspirationAttention({ parseState: "success", mediaAvailability: "available" }), false);
+});
+
+test("Eagle video media does not make a Library body depend on Eagle annotation", () => {
+  const importedVideo = {
+    eagleItemId: "MSVH3PO1X15ZC",
+    captionStorage: "library_body",
+    body: "腾讯云已生成的逐字稿",
+    transcript: "腾讯云已生成的逐字稿",
+  };
+  assert.equal(usesEagleAnnotation(importedVideo), false);
+  assert.equal(usesEagleAnnotation({ ...importedVideo, captionStorage: "eagle_annotation" }), true);
+  assert.equal(usesEagleAnnotation({ ...importedVideo, captionEagleItemId: "MSVH3PO1X15ZC" }), true);
 });

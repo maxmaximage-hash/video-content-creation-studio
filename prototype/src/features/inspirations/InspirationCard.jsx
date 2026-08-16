@@ -26,6 +26,7 @@ import {
   formatMetric,
   platformAuthKey,
   platformTone,
+  usesEagleAnnotation,
   visibleBodyText,
 } from "./inspiration-model.js";
 
@@ -62,12 +63,18 @@ export function InspirationCard({
   const isVideoContent = item.contentType === "video" && Boolean(item.videoLocalPath || item.videoPreviewUrl || item.videoUrl || eagleItemId);
   const [activeImage, setActiveImage] = useState(0);
   const [annotationText, setAnnotationText] = useState("");
-  const [annotationState, setAnnotationState] = useState(eagleItemId ? "loading" : "local");
   const annotationSaveTimerRef = useRef(null);
   const [missingImageIds, setMissingImageIds] = useState(() => new Set());
   const [retryClock, setRetryClock] = useState(() => Date.now());
   const decodedImageCacheRef = useRef(new Map());
-  const bodyText = eagleItemId ? annotationText : visibleBodyText(item);
+  // Eagle owns the media file, but the card body is usually kept in the
+  // Library. Only cards explicitly configured to store their body in an Eagle
+  // annotation should use the Eagle annotation API.
+  const annotationItemId = usesEagleAnnotation(item)
+    ? String(item.captionEagleItemId || eagleItemId || "")
+    : "";
+  const [annotationState, setAnnotationState] = useState(annotationItemId ? "loading" : "local");
+  const bodyText = annotationItemId ? annotationText : visibleBodyText(item);
   const linkedInLibrary = isLinked && !referenceMode;
   const copyOriginalLink = () => {
     navigator.clipboard.writeText(item.originalUrl || "")
@@ -107,14 +114,14 @@ export function InspirationCard({
 
   useEffect(() => {
     clearTimeout(annotationSaveTimerRef.current);
-    if (!eagleItemId) {
+    if (!annotationItemId) {
       setAnnotationText(visibleBodyText(item));
       setAnnotationState("local");
       return undefined;
     }
     let cancelled = false;
     setAnnotationState("loading");
-    fetchEagleAnnotation(eagleItemId)
+    fetchEagleAnnotation(annotationItemId)
       .then((text) => {
         if (cancelled) return;
         setAnnotationText(text);
@@ -129,7 +136,7 @@ export function InspirationCard({
       cancelled = true;
       clearTimeout(annotationSaveTimerRef.current);
     };
-  }, [eagleItemId, item.id, item.captionSha256, item.transcript]);
+  }, [annotationItemId, item.id, item.captionSha256, item.transcript]);
 
   const hashCaption = async (value) => {
     const bytes = new TextEncoder().encode(value);
@@ -138,7 +145,7 @@ export function InspirationCard({
   };
 
   const updateBodyText = (value) => {
-    if (!eagleItemId) {
+    if (!annotationItemId) {
       onBodyChange?.(item.id, value);
       return;
     }
@@ -147,14 +154,14 @@ export function InspirationCard({
     clearTimeout(annotationSaveTimerRef.current);
     annotationSaveTimerRef.current = setTimeout(async () => {
       try {
-        const annotation = await saveEagleAnnotation({ itemId: eagleItemId, annotation: value, sessionId });
+        const annotation = await saveEagleAnnotation({ itemId: annotationItemId, annotation: value, sessionId });
         const sha256 = await hashCaption(annotation);
         setAnnotationText(annotation);
         setAnnotationState("ready");
         onBodyChange?.(item.id, {
           body: "",
           captionStorage: "eagle_annotation",
-          captionEagleItemId: eagleItemId,
+          captionEagleItemId: annotationItemId,
           captionLength: annotation.length,
           captionSha256: sha256,
         });
@@ -418,12 +425,12 @@ export function InspirationCard({
           </div>
         )}
         <div className="card-body-editor">
-          {annotationState === "unavailable" && <div className="card-body-state">文案暂不可读取</div>}
+          {annotationState === "unavailable" && annotationItemId && <div className="card-body-state">文案暂不可读取</div>}
           <textarea
             aria-label="灵感正文"
             value={bodyText}
             placeholder={annotationState === "loading" ? "正在读取 Eagle 注释" : ""}
-            disabled={annotationState === "loading" || annotationState === "unavailable"}
+            disabled={annotationState === "loading" || (annotationState === "unavailable" && Boolean(annotationItemId))}
             onChange={(event) => updateBodyText(event.target.value)}
           />
           {annotationState === "saving" && <span className="card-body-saving">保存到 Eagle</span>}
