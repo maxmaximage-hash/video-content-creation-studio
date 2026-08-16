@@ -1349,6 +1349,149 @@
   min-height: 0;
 }
 
+/* 创作工作区：封面在左、原素材与成品上下叠放在中、关联灵感完整显示在右。 */
+.queue-phase1 .queue-workspace {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+.queue-phase1 .queue-workspace.has-inspiration {
+  grid-template-columns: minmax(0, 1fr) minmax(248px, 292px);
+  align-items: stretch;
+}
+
+.queue-phase1 .queue-workspace .queue-account-grid {
+  min-width: 0;
+  align-content: start;
+}
+
+.queue-phase1 .queue-account-assets {
+  grid-template-columns: minmax(104px, .72fr) minmax(132px, 1fr);
+  align-items: stretch;
+}
+
+.queue-phase1 .queue-account-media {
+  grid-template-columns: 1fr;
+  align-content: start;
+  gap: 8px;
+}
+
+.queue-phase1 .queue-account-media .queue-media-card,
+.queue-phase1 .queue-account-media .queue-media-upload-card {
+  min-height: 71px;
+}
+
+.queue-phase1 .queue-account-media .queue-media-viewport {
+  min-height: 0;
+  height: 72px;
+  max-height: 72px;
+}
+
+.queue-phase1 .queue-account-media .queue-media-info {
+  display: none;
+}
+
+.queue-phase1 .queue-account-assets .queue-cover-gallery:not(.queue-cover-gallery-expanded) .expanded-cover-strip,
+.queue-phase1 .queue-cover-empty {
+  min-height: 150px;
+}
+
+.queue-phase1 .queue-inspiration-panel {
+  min-width: 0;
+  align-self: stretch;
+  padding: 10px;
+  border: 1px solid rgba(214, 179, 106, .28);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .018);
+}
+
+.queue-phase1 .queue-inspiration-panel-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 1px 9px;
+  color: #d6b36a;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.queue-phase1 .queue-inspiration-panel-heading small {
+  color: #888a92;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.queue-phase1 .queue-inspiration-panel-list {
+  display: grid;
+  gap: 10px;
+}
+
+.queue-phase1 .queue-inspiration-card {
+  position: relative;
+  min-width: 0;
+}
+
+.queue-phase1 .queue-inspiration-card .inspiration-card {
+  width: 100% !important;
+  --card-width: 100%;
+}
+
+.queue-phase1 .queue-inspiration-card .inspiration-media {
+  min-height: 170px;
+}
+
+.queue-phase1 .queue-inspiration-card .inspiration-media video {
+  object-fit: cover;
+}
+
+.queue-phase1 .queue-inspiration-card .inspiration-content {
+  padding: 11px 12px 12px;
+}
+
+.queue-phase1 .queue-inspiration-card .inspiration-content h3 {
+  font-size: 14px;
+}
+
+.queue-phase1 .queue-inspiration-card .card-overflow {
+  right: 8px;
+}
+
+.queue-phase1 .queue-inspiration-detach {
+  position: absolute;
+  z-index: 15;
+  top: 9px;
+  right: 48px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, .28);
+  border-radius: 6px;
+  color: #fff;
+  background: rgba(15, 16, 19, .72);
+  cursor: pointer;
+}
+
+.queue-phase1 .queue-inspiration-detach:hover {
+  border-color: #df7d70;
+  color: #ffb6ac;
+  background: rgba(96, 38, 34, .82);
+}
+
+@media (max-width: 1180px) {
+  .queue-phase1 .queue-workspace.has-inspiration {
+    grid-template-columns: 1fr;
+  }
+
+  .queue-phase1 .queue-inspiration-panel {
+    width: min(100%, 360px);
+  }
+}
+
 .queue-phase1 .queue-media-legacy-grid {
   margin-top: 4px;
   padding-top: 14px;

@@ -814,6 +814,7 @@ function QueueCardContent({
   onUndoBodyFormat,
   formattedBodyUndo,
   onEdit,
+  renderReferenceCard,
 }) {
   const mediaProjection = projectMediaSlotProjection(project);
   const uploads = mediaUploads[project.id] || {};
@@ -859,52 +860,82 @@ function QueueCardContent({
           <button type="button" className="delete-queue-button" onClick={() => onDelete(project)}><Trash2 size={16} />删除</button>
         </div>
       </header>
-      {inspirationReferences.length > 0 && (
-        <section className="queue-inspiration-source" aria-label="来源灵感">
-          <div className="queue-inspiration-source-label">来源灵感</div>
-          <div className="queue-inspiration-source-list">
-            {inspirationReferences.map((reference) => (
-              <div className="queue-inspiration-source-item" key={reference.id || reference.contentId || reference.referenceContentId}>
-                <span className="queue-inspiration-source-platform">{reference.platform || "灵感库"}</span>
-                <strong title={reference.title || "未命名灵感"}>{reference.title || "未命名灵感"}</strong>
-                {reference.originalUrl && (
-                  <a href={reference.originalUrl} target="_blank" rel="noreferrer">打开原链接</a>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-      <div className="queue-account-grid">
-        {CONTENT_ACCOUNT_VARIANTS.map((variant) => (
-          <AccountContentColumn
-            key={variant.id}
-            project={project}
-            accountRole={variant.id}
-            accountLabel={variant.label}
-            expanded={expandedAccount === variant.id}
-            onToggle={() => onToggleAccount(variant.id)}
-            states={states}
-            sessionId={sessionId}
-            mediaProjection={mediaProjection}
-            uploads={uploads}
-            notify={notify}
-            onUpdateProject={onUpdateProject}
-            onAddCover={onAddCover}
-            onDropCovers={onDropCovers}
-            onRemoveCover={onRemoveCover}
-            onPreviewCover={onPreviewCover}
-            onChooseMedia={onChooseMedia}
-            onDropMedia={onDropMedia}
-            onRemoveMedia={onRemoveMedia}
-            onOpenMenu={onOpenMenu}
-            uploadingCover={uploadingCover}
-            onFormatBody={onFormatBody}
-            onUndoBodyFormat={onUndoBodyFormat}
-            canUndoBodyFormat={Boolean(formattedBodyUndo[`${project.id}:${variant.id}`])}
-            onEdit={onEdit}
-          />
-        ))}
+      <div className={`queue-workspace ${inspirationReferences.length ? "has-inspiration" : ""}`}>
+        <div className="queue-account-grid">
+          {CONTENT_ACCOUNT_VARIANTS.map((variant) => (
+            <AccountContentColumn
+              key={variant.id}
+              project={project}
+              accountRole={variant.id}
+              accountLabel={variant.label}
+              expanded={expandedAccount === variant.id}
+              onToggle={() => onToggleAccount(variant.id)}
+              states={states}
+              sessionId={sessionId}
+              mediaProjection={mediaProjection}
+              uploads={uploads}
+              notify={notify}
+              onUpdateProject={onUpdateProject}
+              onAddCover={onAddCover}
+              onDropCovers={onDropCovers}
+              onRemoveCover={onRemoveCover}
+              onPreviewCover={onPreviewCover}
+              onChooseMedia={onChooseMedia}
+              onDropMedia={onDropMedia}
+              onRemoveMedia={onRemoveMedia}
+              onOpenMenu={onOpenMenu}
+              uploadingCover={uploadingCover}
+              onFormatBody={onFormatBody}
+              onUndoBodyFormat={onUndoBodyFormat}
+              canUndoBodyFormat={Boolean(formattedBodyUndo[`${project.id}:${variant.id}`])}
+              onEdit={onEdit}
+            />
+          ))}
+        </div>
+        {inspirationReferences.length > 0 && (
+          <aside className="queue-inspiration-panel" aria-label="关联灵感视频">
+            <div className="queue-inspiration-panel-heading">
+              <span>灵感参考</span>
+              <small>{inspirationReferences.length} 条</small>
+            </div>
+            <div className="queue-inspiration-panel-list">
+              {inspirationReferences.map((reference) => (
+                <div className="queue-inspiration-card" key={reference.id || reference.contentId || reference.referenceContentId}>
+                  <button
+                    type="button"
+                    className="queue-inspiration-detach"
+                    aria-label="解除这条灵感参考"
+                    title="解除关联"
+                    onClick={() => onUpdateProject(project.id, (current) => {
+                      const id = reference.id;
+                      return {
+                        ...current,
+                        references: (current.references || []).filter((item) => (typeof item === "string" ? item : item?.id) !== id),
+                        relationships: {
+                          ...(current.relationships || {}),
+                          referenceContentIds: (current.relationships?.referenceContentIds || []).filter((item) => item !== id),
+                        },
+                        modified: "刚刚",
+                      };
+                    })}
+                  ><X size={15} /></button>
+                  {renderReferenceCard?.(reference, {
+                    onDetach: (id) => onUpdateProject(project.id, (current) => {
+                      const nextReferences = (current.references || []).filter((item) => (typeof item === "string" ? item : item?.id) !== id);
+                      const nextReferenceIds = (current.relationships?.referenceContentIds || []).filter((item) => item !== id);
+                      return {
+                        ...current,
+                        references: nextReferences,
+                        relationships: { ...(current.relationships || {}), referenceContentIds: nextReferenceIds },
+                        modified: "刚刚",
+                      };
+                    }),
+                  })}
+                </div>
+              ))}
+            </div>
+          </aside>
+        )}
       </div>
       {mediaProjection.legacyOverflow.length > 0 && (
         <div className="queue-media-legacy-grid" aria-label="历史未归位视频">
@@ -1083,6 +1114,7 @@ export function QueuePage({
   onRevealTarget,
   setSidebarOpen,
   storage,
+  renderReferenceCard,
 }) {
   const [expanded, setExpanded] = useState(null);
   const [activeId, setActiveId] = useState(null);
@@ -1385,6 +1417,7 @@ export function QueuePage({
                   key={project.id}
                   project={project}
                   inspirations={inspirations}
+                  renderReferenceCard={renderReferenceCard}
                   index={projects.indexOf(project)}
                   expandedAccount={expanded?.startsWith(`${project.id}:`) ? expanded.split(":")[1] : null}
                   categories={categories}

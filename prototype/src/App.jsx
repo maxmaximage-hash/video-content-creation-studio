@@ -2056,6 +2056,19 @@ export function App() {
         onRevealTarget={revealProjectAsset}
         setSidebarOpen={setSidebarOpen}
         storage={storage}
+        renderReferenceCard={(item, handlers) => (
+          <InspirationCard
+            item={item}
+            categories={categories}
+            referenceMode
+            onDetach={handlers.onDetach}
+            notify={notify}
+            sessionId={storage?.sessionId || ""}
+            categoryValue={categoryValue}
+            renderMediaPreview={(media) => <MediaPreview item={media} />}
+            key={item.id}
+          />
+        )}
       />
     );
   } else if (page === "archive") {
