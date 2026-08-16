@@ -789,6 +789,7 @@ function AccountContentColumn({
 
 function QueueCardContent({
   project,
+  inspirations = [],
   index,
   expandedAccount,
   onToggleAccount,
@@ -819,6 +820,21 @@ function QueueCardContent({
   const categoryOptions = project.category && !categories.includes(project.category)
     ? [project.category, ...categories]
     : categories;
+  const inspirationById = new Map(inspirations.filter((item) => item?.id).map((item) => [item.id, item]));
+  const rawReferences = [
+    ...(Array.isArray(project.relationships?.referenceContentIds) ? project.relationships.referenceContentIds : []),
+    ...(Array.isArray(project.references) ? project.references : []),
+  ];
+  const inspirationReferences = Array.from(new Map(rawReferences.map((reference) => {
+    const id = typeof reference === "string"
+      ? reference
+      : reference?.id || reference?.contentId || reference?.referenceContentId;
+    return [id, {
+      ...(inspirationById.get(id) || {}),
+      ...(typeof reference === "object" ? reference : {}),
+      id,
+    }];
+  }).filter(([id]) => id)).values());
   return (
     <div className="queue-card-main">
       <header className="queue-card-header">
@@ -843,6 +859,22 @@ function QueueCardContent({
           <button type="button" className="delete-queue-button" onClick={() => onDelete(project)}><Trash2 size={16} />删除</button>
         </div>
       </header>
+      {inspirationReferences.length > 0 && (
+        <section className="queue-inspiration-source" aria-label="来源灵感">
+          <div className="queue-inspiration-source-label">来源灵感</div>
+          <div className="queue-inspiration-source-list">
+            {inspirationReferences.map((reference) => (
+              <div className="queue-inspiration-source-item" key={reference.id || reference.contentId || reference.referenceContentId}>
+                <span className="queue-inspiration-source-platform">{reference.platform || "灵感库"}</span>
+                <strong title={reference.title || "未命名灵感"}>{reference.title || "未命名灵感"}</strong>
+                {reference.originalUrl && (
+                  <a href={reference.originalUrl} target="_blank" rel="noreferrer">打开原链接</a>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
       <div className="queue-account-grid">
         {CONTENT_ACCOUNT_VARIANTS.map((variant) => (
           <AccountContentColumn
@@ -1035,6 +1067,7 @@ function QueueContextMenu({ menu, onClose, onReveal }) {
 
 export function QueuePage({
   projects,
+  inspirations = [],
   setProjects,
   categories,
   mediaUploads,
@@ -1351,6 +1384,7 @@ export function QueuePage({
                 <SortableQueueCard
                   key={project.id}
                   project={project}
+                  inspirations={inspirations}
                   index={projects.indexOf(project)}
                   expandedAccount={expanded?.startsWith(`${project.id}:`) ? expanded.split(":")[1] : null}
                   categories={categories}

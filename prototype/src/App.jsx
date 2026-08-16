@@ -2040,6 +2040,7 @@ export function App() {
     main = (
       <QueuePage
         projects={projects}
+        inspirations={inspirationItems}
         setProjects={setProjects}
         categories={categories}
         mediaUploads={mediaUploads}

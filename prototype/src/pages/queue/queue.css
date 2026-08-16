@@ -85,6 +85,60 @@
   gap: 14px;
 }
 
+.queue-phase1 .queue-inspiration-source {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(214, 179, 106, .22);
+  border-radius: 6px;
+  background: rgba(214, 179, 106, .06);
+}
+
+.queue-phase1 .queue-inspiration-source-label {
+  color: #d6b36a;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.queue-phase1 .queue-inspiration-source-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.queue-phase1 .queue-inspiration-source-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 7px;
+  border-radius: 4px;
+  color: #c7c8cc;
+  background: rgba(255, 255, 255, .05);
+  font-size: 11px;
+}
+
+.queue-phase1 .queue-inspiration-source-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.queue-phase1 .queue-inspiration-source-platform {
+  color: #d6b36a;
+}
+
+.queue-phase1 .queue-inspiration-source-item a {
+  color: #aeb9d6;
+  white-space: nowrap;
+}
+
 .queue-phase1 .queue-card-topbar {
   min-height: 34px;
   display: flex;
