@@ -37,55 +37,9 @@ function effectiveCaptureState(item) {
 }
 
 function LinkCapture({ categories, onAdd, storage, onApplyLibrary, onBatchChange, notify, authStatus, onOpenAuth, onRefreshAuth }) {
-  const [url, setUrl] = useState("");
-  const [category, setCategory] = useState("");
-  const [adding, setAdding] = useState(false);
-
-  useEffect(() => {
-    if (category && !categories.includes(category)) setCategory("");
-  }, [categories, category]);
-
-  const links = Array.from(new Set(
-    [...url.matchAll(/https?:\/\/[^\s"'<>，。]+/gi)].map((match) => match[0].replace(/[)\]}]+$/, "")),
-  ));
-
-  const addLink = async () => {
-    if (!links.length) return;
-    setAdding(true);
-    try {
-      const results = await Promise.all(links.map((link) => onAdd(link, category)));
-      if (results.every((ok) => ok !== false)) setUrl("");
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  return (
-    <div className="inspiration-capture-stack">
-    <section className="link-capture real-capture" aria-label="添加真实灵感链接">
-      <div className="capture-icon"><Link2 size={20} /></div>
-      <textarea
-        value={url}
-        onChange={(event) => setUrl(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault();
-            void addLink();
-          }
-        }}
-        placeholder="粘贴一条或多条真实链接，批量时一行一条（⌘⏎ 开始）"
-          aria-label="主页或作品链接"
-      />
-      <select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="入库分类">
-        <option value="">未分类</option>
-        {categories.map((item) => <option value={item} key={item}>{item}</option>)}
-      </select>
-      <button type="button" className="primary-button" onClick={addLink} disabled={!links.length || adding}>
-        {adding ? <RefreshCw size={16} className="spin" /> : <Plus size={16} />}
-        {adding ? `正在处理 ${links.length} 条` : links.length > 1 ? `批量添加 ${links.length} 条` : "添加灵感"}
-      </button>
-    </section>
-    <ProfileBatchCapture
+  return <ProfileBatchCapture
+      categories={categories}
+      onAdd={onAdd}
       storage={storage}
       onApplyLibrary={onApplyLibrary}
       onBatchChange={onBatchChange}
@@ -93,19 +47,14 @@ function LinkCapture({ categories, onAdd, storage, onApplyLibrary, onBatchChange
       authStatus={authStatus}
       onOpenAuth={onOpenAuth}
       onRefreshAuth={onRefreshAuth}
-      captureValue={url}
-      onCaptureValueChange={setUrl}
-      category={category}
-      hideInput
-    />
-    </div>
-  );
+    />;
 }
 
-function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, authStatus, onOpenAuth, onRefreshAuth, captureValue, onCaptureValueChange, category = "", hideInput = false }) {
+function ProfileBatchCapture({ categories, onAdd, storage, onApplyLibrary, onBatchChange, notify, authStatus, onOpenAuth, onRefreshAuth }) {
   const [internalProfileUrl, setInternalProfileUrl] = useState("");
-  const profileUrl = captureValue ?? internalProfileUrl;
-  const setProfileUrl = onCaptureValueChange || setInternalProfileUrl;
+  const profileUrl = internalProfileUrl;
+  const [category, setCategory] = useState("");
+  const [adding, setAdding] = useState(false);
   const [transcribe, setTranscribe] = useState(true);
   const [batch, setBatch] = useState(null);
   const [starting, setStarting] = useState(false);
@@ -115,6 +64,26 @@ function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, a
   const [asrStatus, setAsrStatus] = useState(null);
   const lastAppliedUpdate = useRef("");
   const autoResumeKeys = useRef(new Set());
+
+  useEffect(() => {
+    if (category && !categories.includes(category)) setCategory("");
+  }, [categories, category]);
+
+  const links = Array.from(new Set(
+    [...profileUrl.matchAll(/https?:\/\/[^\s"'<>，。]+/gi)].map((match) => match[0].replace(/[)\]}]+$/, "")),
+  ));
+
+  const isProfileUrl = (value) => {
+    try {
+      const parsed = new URL(value);
+      const path = parsed.pathname.toLowerCase();
+      return /(^|\/)(user|profile|creator|channel|home|u)(\/|$)/.test(path)
+        || path.startsWith("/@")
+        || ["www.douyin.com", "www.xiaohongshu.com", "space.bilibili.com", "www.youtube.com", "www.instagram.com"].includes(parsed.hostname) && path.split("/").filter(Boolean).length <= 1;
+    } catch {
+      return false;
+    }
+  };
 
   useEffect(() => {
     fetch("/api/transcription/status").then((response) => response.json()).then(setAsrStatus).catch(() => {});
@@ -194,8 +163,8 @@ function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, a
     return () => window.clearTimeout(timer);
   }, [batch?.id, batch?.state, batch?.nextRetryAt]);
 
-  const start = async () => {
-    if (!profileUrl.trim() || starting) return;
+  const start = async (value = profileUrl) => {
+    if (!value.trim() || starting) return;
     setStarting(true);
     try {
       const response = await fetch("/api/profile-scans", {
@@ -204,7 +173,7 @@ function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, a
           "content-type": "application/json",
           "x-library-session-id": storage?.sessionId || "",
         },
-          body: JSON.stringify({ profileUrl, category, autoCollect: true, transcribe }),
+          body: JSON.stringify({ profileUrl: value, category, autoCollect: true, transcribe }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "主页扫描启动失败");
@@ -215,6 +184,21 @@ function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, a
       notify(error.message);
     } finally {
       setStarting(false);
+    }
+  };
+
+  const submit = async () => {
+    if (!links.length || adding || starting) return;
+    if (links.length === 1 && isProfileUrl(links[0])) {
+      await start(links[0]);
+      return;
+    }
+    setAdding(true);
+    try {
+      const results = await Promise.all(links.map((link) => onAdd(link, category)));
+      if (results.every((ok) => ok !== false)) setInternalProfileUrl("");
+    } finally {
+      setAdding(false);
     }
   };
 
@@ -237,17 +221,35 @@ function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, a
   };
 
   return (
-    <section className="profile-batch-capture" aria-label="主页或作品批量采集">
-      <div className="profile-batch-heading">
-        <div><strong>主页与作品采集</strong><small>自动识别单条作品或扫描主页全部公开作品，去重后写入同一个灵感库</small></div>
-        <label className="profile-transcript-toggle">
+    <section className="link-capture real-capture unified-capture" aria-label="添加真实灵感链接">
+      <div className="capture-icon"><Link2 size={20} /></div>
+      <textarea
+        value={profileUrl}
+        onChange={(event) => setInternalProfileUrl(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            void submit();
+          }
+        }}
+        placeholder="粘贴作品、主页或多条真实链接，批量时一行一条（⌘⏎ 开始）"
+        aria-label="主页或作品链接"
+      />
+      <select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="入库分类">
+        <option value="">未分类</option>
+        {categories.map((item) => <option value={item} key={item}>{item}</option>)}
+      </select>
+      <label className="profile-transcript-toggle">
           <input type="checkbox" checked={transcribe} onChange={(event) => setTranscribe(event.target.checked)} />
           同时生成逐字稿
-        </label>
-        <button type="button" className="text-button" onClick={() => setSettingsOpen((value) => !value)}>
-          {asrStatus?.tencentConfigured ? "腾讯云已配置" : "配置腾讯云免费转写"}
-        </button>
-      </div>
+      </label>
+      <button type="button" className="text-button capture-settings-button" onClick={() => setSettingsOpen((value) => !value)}>
+        {asrStatus?.tencentConfigured ? "腾讯云已配置" : "配置转写"}
+      </button>
+      <button type="button" className="primary-button" onClick={submit} disabled={!links.length || adding || starting}>
+        {(adding || starting) ? <RefreshCw size={16} className="spin" /> : links.length === 1 && isProfileUrl(links[0]) ? <Search size={16} /> : <Plus size={16} />}
+        {(adding || starting) ? (starting ? "正在启动" : `正在处理 ${links.length} 条`) : links.length === 1 && isProfileUrl(links[0]) ? "扫描并自动扒取" : links.length > 1 ? `批量添加 ${links.length} 条` : "添加灵感"}
+      </button>
       {asrStatus?.tencentConfigured ? (
         <p className="asr-policy-note">
           {asrStatus.usageCheckAvailable
@@ -262,21 +264,6 @@ function ProfileBatchCapture({ storage, onApplyLibrary, onBatchChange, notify, a
           <button type="button" className="quiet-button" onClick={saveAsr} disabled={!secretId.trim() || !secretKey.trim()}>保存到钥匙串</button>
         </div>
       ) : null}
-      <div className="profile-batch-form">
-        {!hideInput ? (
-          <input
-            value={profileUrl}
-            onChange={(event) => setProfileUrl(event.target.value)}
-            onKeyDown={(event) => event.key === "Enter" && start()}
-            placeholder="粘贴平台主页、单条作品或完整分享文字"
-            aria-label="主页或作品链接"
-          />
-        ) : <span className="profile-batch-shared-input">使用上方链接输入框扫描主页或单条作品</span>}
-        <button type="button" className="quiet-button" onClick={start} disabled={!profileUrl.trim() || starting}>
-          {starting ? <RefreshCw size={16} className="spin" /> : <Search size={16} />}
-          {starting ? "正在启动" : "扫描并自动扒取"}
-        </button>
-      </div>
       {batch ? (
         <div className={`profile-batch-status is-${batch.state}`}>
           <span>{batch.message || batch.state}</span>

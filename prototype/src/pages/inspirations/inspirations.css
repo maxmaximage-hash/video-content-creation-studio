@@ -16,15 +16,14 @@
   min-height: 240px;
 }
 
-.inspiration-capture-stack {
-  display: grid;
-  gap: 10px;
+.link-capture.real-capture.unified-capture {
+  grid-template-columns: 34px minmax(260px, 1fr) 116px auto auto auto;
+  align-items: center;
 }
 
-.profile-batch-shared-input {
-  flex: 1;
-  color: #858b96;
-  font-size: 12px;
+.unified-capture .profile-transcript-toggle,
+.unified-capture .capture-settings-button {
+  white-space: nowrap;
 }
 
 .profile-batch-capture {
@@ -104,10 +103,16 @@
 }
 
 .profile-batch-status {
+  grid-column: 1 / -1;
   padding-top: 11px;
   border-top: 1px solid rgba(255, 255, 255, .07);
   color: #bec4ce;
   font-size: 12px;
+}
+
+.unified-capture .asr-policy-note,
+.unified-capture .asr-settings-row {
+  grid-column: 1 / -1;
 }
 
 .profile-batch-status .quiet-button {
@@ -195,5 +200,16 @@
 
   .asr-settings-row {
     grid-template-columns: 1fr;
+  }
+
+  .link-capture.real-capture.unified-capture {
+    grid-template-columns: 34px 1fr;
+  }
+
+  .unified-capture select,
+  .unified-capture .profile-transcript-toggle,
+  .unified-capture .capture-settings-button,
+  .unified-capture .primary-button {
+    grid-column: 1 / -1;
   }
 }

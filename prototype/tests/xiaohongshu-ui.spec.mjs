@@ -149,7 +149,7 @@ test("duplicate title is not shown as body text", async ({ page, request }) => {
 
 test("xhslink.cn share text is recognized as Xiaohongshu before extraction", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("textbox", { name: "真实内容链接" }).fill(
+  await page.getByRole("textbox", { name: "主页或作品链接" }).fill(
     "去湘湖吃漂亮饭咯 http://xhslink.cn/o/N3xcFGE7Ed 复制这段，去【小红书】发现更多好内容~",
   );
   await expect(page.getByRole("button", { name: "添加灵感" })).toBeEnabled();

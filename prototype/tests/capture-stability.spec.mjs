@@ -8,7 +8,7 @@ function inspiration(overrides = {}) {
     resolvedUrl: "https://www.douyin.com/video/801",
     platform: "抖音",
     platformItemId: "801",
-    contentType: "video",
+    contentType: "",
     author: "",
     title: "等待采集的灵感",
     body: "",
@@ -242,7 +242,7 @@ test("profile batch immediately promotes the active card and shows its live stag
   });
 
   await page.goto("/");
-  await page.getByRole("textbox", { name: "主页或作品链接" }).fill("https://www.douyin.com/video/802");
+  await page.getByRole("textbox", { name: "主页或作品链接" }).fill("https://www.douyin.com/user/802");
   await page.getByRole("button", { name: "扫描并自动扒取" }).click();
   const firstCard = page.locator(".inspiration-grid .inspiration-card").first();
   await expect(firstCard).toHaveAttribute("data-inspiration-id", "I000802", { timeout: 8000 });
