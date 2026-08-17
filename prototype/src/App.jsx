@@ -847,6 +847,25 @@ export function App() {
     ? projects.find((project) => project.id === editingProjectId) || null
     : null;
   const creationProject = editingProject || activeProject;
+  // A newly started creation is kept as activeProject until it is saved to the
+  // queue. It must still be visible in the queue so the inspiration relationship
+  // is never hidden between the two workspaces.
+  const queueProjects = activeProject && !projects.some((project) => project.id === activeProject.id)
+    ? [activeProject, ...projects]
+    : projects;
+  const setQueueProjects = (updater) => {
+    const current = queueProjects;
+    const next = typeof updater === "function" ? updater(current) : updater;
+    const activeId = activeProjectRef.current?.id || "";
+    const activeFromQueue = next.find((project) => project.id === activeId);
+    if (activeFromQueue) {
+      activeProjectRef.current = activeFromQueue;
+      setActiveProject(activeFromQueue);
+    }
+    const withoutActive = activeId ? next.filter((project) => project.id !== activeId) : next;
+    projectsRef.current = withoutActive;
+    setProjects(withoutActive);
+  };
 
   const applyLibraryData = (data) => {
     if (data.libraryOpen === false) {
@@ -1370,6 +1389,7 @@ export function App() {
       replaceProjectId: activeProjectRef.current?.id || "",
     });
     if (!project) return;
+    setPage("queue");
     notify(`已新建 ${project.id}，并关联灵感`);
   };
 
@@ -1438,7 +1458,14 @@ export function App() {
   };
 
   const addToExisting = (project, inspiration) => {
-    setProjects((current) => current.map((item) => item.id === project.id && !item.references.some((ref) => ref.id === inspiration.id) ? { ...item, references: [...item.references, inspiration], modified: "刚刚" } : item));
+    updateProjectById(project.id, (current) => (
+      current.references?.some((ref) => ref.id === inspiration.id)
+        ? current
+        : { ...current, references: [...(current.references || []), inspiration], modified: "刚刚" }
+    ));
+    setChoiceItem(null);
+    setPage("queue");
+    notify(`已将灵感加入 ${project.id}`);
   };
 
   const updateProjectById = (projectId, updater) => {
@@ -2039,9 +2066,9 @@ export function App() {
   } else if (page === "queue") {
     main = (
       <QueuePage
-        projects={projects}
+        projects={queueProjects}
         inspirations={inspirationItems}
-        setProjects={setProjects}
+        setProjects={setQueueProjects}
         categories={categories}
         mediaUploads={mediaUploads}
         notify={notify}
@@ -2120,10 +2147,10 @@ export function App() {
 
   return (
     <div className="app-frame">
-      <AppSidebar page={page} setPage={setPage} queueCount={projects.length} archiveCount={archiveItems.length} open={sidebarOpen} setOpen={setSidebarOpen} storage={storage} saveState={saveState} libraryBusy={libraryBusy} onLibraryAction={requestLibraryAction} />
+      <AppSidebar page={page} setPage={setPage} queueCount={queueProjects.length} archiveCount={archiveItems.length} open={sidebarOpen} setOpen={setSidebarOpen} storage={storage} saveState={saveState} libraryBusy={libraryBusy} onLibraryAction={requestLibraryAction} />
       {sidebarOpen && <button type="button" className="sidebar-scrim" aria-label="关闭导航" onClick={() => setSidebarOpen(false)} />}
       <div className="app-content">{main}</div>
-      {choiceItem && <CreationChoiceModal item={choiceItem} projects={projects} onClose={() => setChoiceItem(null)} onNew={createNew} onAdd={addToExisting} notify={notify} />}
+      {choiceItem && <CreationChoiceModal item={choiceItem} projects={queueProjects} onClose={() => setChoiceItem(null)} onNew={createNew} onAdd={addToExisting} notify={notify} />}
       {categoryManagerOpen && <CategoryManagerModal categories={categories} counts={categoryCounts} onAdd={(category) => {
         userCategoriesStoredRef.current = true;
         setCategories((current) => [...current, category]);
