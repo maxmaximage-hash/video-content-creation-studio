@@ -1360,13 +1360,11 @@
 .queue-phase1 .queue-workspace.has-inspiration {
   grid-template-columns: minmax(0, 1fr) minmax(248px, 292px);
   align-items: stretch;
-  min-height: 430px;
 }
 
 .queue-phase1 .queue-workspace .queue-account-grid {
   min-width: 0;
   align-content: start;
-  min-height: 430px;
 }
 
 .queue-phase1 .queue-account-assets {
@@ -1402,8 +1400,6 @@
 
 .queue-phase1 .queue-inspiration-panel {
   min-width: 0;
-  height: 430px;
-  box-sizing: border-box;
   align-self: stretch;
   padding: 10px;
   border: 1px solid rgba(214, 179, 106, .28);
@@ -1439,26 +1435,13 @@
 }
 
 .queue-phase1 .queue-inspiration-card .inspiration-card {
-  /* 右侧保持完整卡片功能，按确认比例缩小到约 370px 高。 */
+  /* 保持灵感库卡片的正常字号、间距与原始纵横比例。 */
   width: 100% !important;
   --card-width: 100%;
-  zoom: .57;
 }
 
 .queue-phase1 .queue-inspiration-card .inspiration-media {
-  aspect-ratio: auto;
-  height: calc(254px);
   min-height: 0;
-}
-
-.queue-phase1 .queue-inspiration-card .inspiration-media img,
-.queue-phase1 .queue-inspiration-card .inspiration-media video {
-  object-fit: contain;
-  background: #111216;
-}
-
-.queue-phase1 .queue-inspiration-card .inspiration-media video {
-  object-fit: cover;
 }
 
 .queue-phase1 .queue-inspiration-card .inspiration-content {
